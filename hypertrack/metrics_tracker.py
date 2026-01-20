@@ -25,6 +25,8 @@ import threading
 import statistics
 import math
 
+from hypertrack.constants import TOTAL_TRADES_THRESHOLD, WATCH_COINS
+
 
 class UserMetrics:
     """Tracks metrics for a single user."""
@@ -60,6 +62,9 @@ class UserMetrics:
         self.long_volume = 0.0
         self.short_volume = 0.0
         
+        # Coins tracked (for filtering by WATCH_COINS)
+        self.coins_traded = set()
+        
         # Start time for this user
         self.first_seen = time.time()
     
@@ -67,6 +72,7 @@ class UserMetrics:
                           leverage: Optional[float] = None, margin: Optional[float] = None):
         """Record a position update."""
         if abs(size_change) > 0:  # Only count non-zero size changes
+            self.coins_traded.add(coin)  # Track which coins this user trades
             self.position_updates.append({
                 'timestamp': timestamp,
                 'coin': coin,
@@ -133,6 +139,7 @@ class UserMetrics:
     
     def add_trade(self, timestamp: float, coin: str, side: str, size: float):
         """Record a trade."""
+        self.coins_traded.add(coin)  # Track which coins this user trades
         self.trades.append({
             'timestamp': timestamp,
             'coin': coin,
@@ -555,19 +562,11 @@ class MetricsTracker:
         """Handle WebSocket open."""
         print("WebSocket connected to Hyperliquid")
         
-        # Get all coins
-        meta = self._api_request({"type": "meta"})
-        coins = []
-        if meta and "universe" in meta:
-            coins = [coin["name"] for coin in meta["universe"]]
+        # Use WATCH_COINS from constants
+        coins = WATCH_COINS
         
-        if not coins:
-            print("WARNING: Could not get list of coins. Trying to subscribe anyway...")
-            # Try subscribing to a few common coins
-            coins = ["BTC", "ETH", "SOL", "ARB", "AVAX"]
-        
-        # Subscribe to all trades (to discover users)
-        print(f"Subscribing to trades for {len(coins)} coins...")
+        # Subscribe to trades for watched coins (to discover users)
+        print(f"Subscribing to trades for {len(coins)} coins: {', '.join(coins)}")
         subscribed = 0
         for coin in coins:
             try:
@@ -686,10 +685,23 @@ class MetricsTracker:
                 # Print status every 30 seconds
                 if time.time() - last_status_time > 30:
                     with self.lock:
+                        # Count eligible users (those with more than TOTAL_TRADES_THRESHOLD trades AND activity in WATCH_COINS)
+                        eligible_count = 0
+                        for metrics_obj in self.user_metrics.values():
+                            # Check if user has activity in WATCH_COINS
+                            has_watched_coin = bool(metrics_obj.coins_traded & set(WATCH_COINS))
+                            if not has_watched_coin:
+                                continue
+                            
+                            total_trades = len(metrics_obj.trades) + len(metrics_obj.position_updates)
+                            if total_trades > TOTAL_TRADES_THRESHOLD:
+                                eligible_count += 1
+                        
                         total_trades = sum(len(m.trades) for m in self.user_metrics.values())
                         print(f"\n[Status] Events recorded: {self.stats['total_events']}, "
                               f"Users discovered: {len(self.tracked_users)}, "
                               f"Users with metrics: {len(self.user_metrics)}, "
+                              f"Eligible users count: {eligible_count}, "
                               f"Trades: {self.stats['trades']}, "
                               f"Orders: {self.stats['orders']}, "
                               f"Position updates: {self.stats['position_updates']}")
@@ -770,15 +782,48 @@ class MetricsTracker:
         # Calculate metrics for all users
         user_reports = []
         for user, metrics_obj in self.user_metrics.items():
+            # Only include users with activity in WATCH_COINS
+            has_watched_coin = bool(metrics_obj.coins_traded & set(WATCH_COINS))
+            if not has_watched_coin:
+                continue
+            
             metrics = metrics_obj.calculate_metrics(session_duration)
             metrics['user_address'] = user
             user_reports.append(metrics)
         
+        # Filter: only show users with more than TOTAL_TRADES_THRESHOLD trades
+        filtered_reports = [r for r in user_reports if r['total_trades'] > TOTAL_TRADES_THRESHOLD]
+        
+        if not filtered_reports:
+            print(f"\nNo users with more than {TOTAL_TRADES_THRESHOLD} trades.")
+            print(f"Total users tracked: {len(user_reports)}")
+            print(f"Users filtered out (≤{TOTAL_TRADES_THRESHOLD} trades): {len(user_reports) - len(filtered_reports)}")
+            
+            # Still save report with all users (but note the filter)
+            report_file = f"metrics_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            with open(report_file, 'w') as f:
+                json.dump({
+                    'session_duration_seconds': session_duration,
+                    'total_users': len(user_reports),
+                    'total_users_discovered': len(self.tracked_users),
+                    'users_shown': len(filtered_reports),
+                    'filter_applied': f'users_with_more_than_{TOTAL_TRADES_THRESHOLD}_trades',
+                    'generated_at': datetime.utcnow().isoformat() + 'Z',
+                    'users': filtered_reports
+                }, f, indent=2)
+            print(f"\nReport saved to: {report_file} (filtered, showing only users with >{TOTAL_TRADES_THRESHOLD} trades)")
+            return
+        
         # Sort by total trades (most active first)
-        user_reports.sort(key=lambda x: x['total_trades'], reverse=True)
+        filtered_reports.sort(key=lambda x: x['total_trades'], reverse=True)
+        
+        print(f"\nShowing {len(filtered_reports)} users with more than {TOTAL_TRADES_THRESHOLD} trades in WATCH_COINS")
+        print(f"(Filtered out {len(user_reports) - len(filtered_reports)} users with ≤{TOTAL_TRADES_THRESHOLD} trades)")
+        print(f"WATCH_COINS: {', '.join(WATCH_COINS)}")
+        print("=" * 80)
         
         # Print report for each user
-        for i, report in enumerate(user_reports, 1):
+        for i, report in enumerate(filtered_reports, 1):
             user = report['user_address']
             print(f"\n{'=' * 80}")
             print(f"User #{i}: {user}")
@@ -804,17 +849,28 @@ class MetricsTracker:
             print(f"    Short volume:             {report['short_volume']:.2f}")
             print(f"    Direction changes:        {report['direction_changes']}")
         
-        # Save report to file
+        # Save report to file (only users with >TOTAL_TRADES_THRESHOLD trades)
         report_file = f"metrics_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(report_file, 'w') as f:
             json.dump({
                 'session_duration_seconds': session_duration,
-                'total_users': len(self.user_metrics),
-                'generated_at': datetime.utcnow().isoformat() + 'Z',
-                'users': user_reports
+                'total_users_tracked': len(self.user_metrics),
+                'total_users_discovered': len(self.tracked_users),
+                    'users_shown': len(filtered_reports),
+                    'users_filtered_out': len(user_reports) - len(filtered_reports),
+                    'filter_applied': f'users_with_more_than_{TOTAL_TRADES_THRESHOLD}_trades_in_WATCH_COINS',
+                    'trades_threshold': TOTAL_TRADES_THRESHOLD,
+                    'watch_coins': WATCH_COINS,
+                    'generated_at': datetime.utcnow().isoformat() + 'Z',
+                    'users': filtered_reports
             }, f, indent=2)
         
+        # Print summary
         print(f"\n{'=' * 80}")
+        print("SUMMARY")
+        print(f"{'=' * 80}")
+        print(f"Total users shown: {len(filtered_reports)}")
+        print(f"{'=' * 80}")
         print(f"Report saved to: {report_file}")
         print(f"{'=' * 80}")
 
