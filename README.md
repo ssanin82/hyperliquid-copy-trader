@@ -24,6 +24,7 @@ A Python package for tracking Hyperliquid trading activity and detecting profita
 - **Human-Readable Output**: Timestamped, formatted log entries for manual inspection
 - **Comprehensive Event Data**: Includes price, size, side, user addresses, PnL, and more
 - **Reliable Public RPC**: Uses Hyperliquid's official public API endpoints (free and reliable)
+- **No SDK Dependency**: Uses direct HTTP requests and WebSocket connections (no external SDK required)
 
 ## Installation
 
@@ -189,8 +190,8 @@ hypertrack/
 ## Requirements
 
 - Python 3.8+
-- `hyperliquid-python-sdk` (official Hyperliquid Python SDK)
-- `websocket-client` (optional, for WebSocket streams)
+- `requests` (for HTTP REST API calls)
+- `websocket-client` (for WebSocket real-time streams)
 
 ## Limitations
 

@@ -64,6 +64,7 @@ setup(
     entry_points={
         "console_scripts": [
             "hypertrack=hypertrack.recorder:main",
+            "hypertrack-metrics=hypertrack.metrics_tracker:main",
         ],
     },
     keywords="hyperliquid, trading, cryptocurrency, defi, blockchain, trading-bot, ml, machine-learning",

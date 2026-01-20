@@ -1,7 +1,7 @@
-# Hyperliquid Python SDK for API access
-hyperliquid-python-sdk>=1.0.0
+# HTTP requests for REST API calls
+requests>=2.28.0
 
-# WebSocket support for real-time streams (optional, for future use)
+# WebSocket support for real-time streams
 websocket-client>=1.6.0
 
 # Standard library dependencies are sufficient for basic functionality
