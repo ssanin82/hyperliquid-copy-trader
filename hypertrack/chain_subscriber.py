@@ -56,6 +56,9 @@ class ChainSubscriber:
         self.erc20_token_addresses = set()  # Store unique ERC-20 token addresses
         # ERC-20 Transfer event signature: keccak256("Transfer(address,address,uint256)")
         self.ERC20_TRANSFER_EVENT_SIG = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        # RPC call tracking
+        self.rpc_call_count = 0
+        self.rpc_start_time = None
         
     def _log_transaction(self, tx_data: Dict[str, Any]):
         """Log a transaction to console and optionally to file."""
@@ -81,6 +84,11 @@ class ChainSubscriber:
     
     def _json_rpc_request(self, method: str, params: list, request_id: int = 1) -> Dict[str, Any]:
         """Make a JSON-RPC request."""
+        # Track RPC calls
+        if self.rpc_start_time is None:
+            self.rpc_start_time = time.time()
+        self.rpc_call_count += 1
+        
         payload = {
             "jsonrpc": "2.0",
             "method": method,
@@ -524,6 +532,24 @@ class ChainSubscriber:
         print(f"Logged {self.transaction_count} transactions")
         if self.log_file:
             print(f"Log saved to: {self.log_file}")
+        
+        # Display RPC call statistics
+        print("\n" + "=" * 80)
+        print("RPC CALL STATISTICS")
+        print("=" * 80)
+        if self.rpc_start_time:
+            elapsed_time = time.time() - self.rpc_start_time
+            if elapsed_time > 0:
+                rpc_calls_per_second = self.rpc_call_count / elapsed_time
+                print(f"Total RPC calls: {self.rpc_call_count}")
+                print(f"Total time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+                print(f"RPC calls per second: {rpc_calls_per_second:.2f}")
+            else:
+                print(f"Total RPC calls: {self.rpc_call_count}")
+                print("Total time: < 1 second")
+        else:
+            print("No RPC calls made")
+        print("=" * 80)
         
         # Display all collected EOA addresses
         print("\n" + "=" * 80)

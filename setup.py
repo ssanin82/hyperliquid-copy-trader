@@ -23,8 +23,8 @@ if requirements_path.exists():
 setup(
     name="hypertrack",
     version="0.1.0",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="Sergiy Sanin",
+    author_email="sanin_sergiy@yahoo.com",
     description="A Python package for tracking Hyperliquid trading activity and detecting profitable traders",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -66,6 +66,7 @@ setup(
             "hypertrack=hypertrack.recorder:main",
             "hypertrack-metrics=hypertrack.metrics_tracker:main",
             "hypertrack-chain=hypertrack.chain_subscriber:main",
+            "hypertrack-profile=hypertrack.wallet_profiler:main",
         ],
     },
     keywords="hyperliquid, trading, cryptocurrency, defi, blockchain, trading-bot, ml, machine-learning",

@@ -4,5 +4,6 @@ requests>=2.28.0
 # WebSocket support for real-time streams
 websocket-client>=1.6.0
 
-# Standard library dependencies are sufficient for basic functionality
-# No additional packages required for core functionality
+# Machine learning (for wallet_profiler.py)
+torch>=2.0.0
+numpy>=1.24.0
