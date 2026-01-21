@@ -2,7 +2,6 @@
 MetricsTracker - Tracks trading metrics per user wallet for profitable trader detection.
 
 Subscribes to all necessary Hyperliquid streams and calculates:
-- trades_per_day
 - cancel_rate
 - burstiness
 - avg_leverage, max_leverage, leverage_volatility
@@ -10,13 +9,14 @@ Subscribes to all necessary Hyperliquid streams and calculates:
 - holding_time
 - long_short_ratio
 - flip_rate
+- bot_score (with automatic "Bot" labeling if score > BOT_SCORE)
 """
 
 import json
 import time
 import signal
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Optional, Dict, Any, List
 from collections import defaultdict, deque
 import requests
@@ -25,7 +25,7 @@ import threading
 import statistics
 import math
 
-from hypertrack.constants import TOTAL_TRADES_THRESHOLD, WATCH_COINS
+from hypertrack.constants import TOTAL_TRADES_THRESHOLD, WATCH_COINS, BOT_SCORE
 
 
 class UserMetrics:
@@ -42,10 +42,13 @@ class UserMetrics:
         # Order tracking
         self.limit_orders = 0
         self.cancel_orders = 0
+        self.order_timestamps = []  # For reaction_time calculation
         
         # Trade tracking
         self.trades = []  # List of (timestamp, side, size, coin)
         self.trade_times = []  # For burstiness calculation
+        self.trade_sizes = []  # For size_entropy calculation
+        self.all_event_times = []  # All event timestamps for session_entropy
         
         # Leverage tracking
         self.leverage_history = []  # List of leverage values
@@ -67,6 +70,9 @@ class UserMetrics:
         
         # Start time for this user
         self.first_seen = time.time()
+        
+        # Labels for this user (e.g., ["Bot"])
+        self.labels = []
     
     def add_position_update(self, timestamp: float, coin: str, size_change: float, 
                           leverage: Optional[float] = None, margin: Optional[float] = None):
@@ -81,6 +87,7 @@ class UserMetrics:
                 'margin': margin
             })
             self.trade_times.append(timestamp)
+            self.all_event_times.append(timestamp)
             
             # Track leverage
             if leverage is not None:
@@ -147,6 +154,8 @@ class UserMetrics:
             'size': size
         })
         self.trade_times.append(timestamp)
+        self.trade_sizes.append(size)
+        self.all_event_times.append(timestamp)
         
         # Track volume
         if side.upper() in ['B', 'BUY', 'LONG']:
@@ -154,30 +163,64 @@ class UserMetrics:
         else:
             self.short_volume += size
     
-    def add_order_event(self, order_type: str):
+    def add_order_event(self, order_type: str, timestamp: Optional[float] = None):
         """Record an order event."""
+        if timestamp is None:
+            timestamp = time.time()
+        
         if order_type.lower() in ['limit', 'limitorder']:
             self.limit_orders += 1
+            self.order_timestamps.append(timestamp)
+            self.all_event_times.append(timestamp)
         elif order_type.lower() in ['cancel', 'cancelorder']:
             self.cancel_orders += 1
+            self.all_event_times.append(timestamp)
+    
+    @staticmethod
+    def _calculate_entropy(values: List[float], bins: int = 10) -> float:
+        """Calculate entropy of a distribution."""
+        if len(values) < 2:
+            return 0.0
+        
+        # Discretize values into bins
+        if not values:
+            return 0.0
+        
+        min_val = min(values)
+        max_val = max(values)
+        if max_val == min_val:
+            return 0.0  # All values are the same, entropy is 0
+        
+        bin_counts = [0] * bins
+        bin_size = (max_val - min_val) / bins
+        
+        for val in values:
+            bin_idx = min(int((val - min_val) / bin_size), bins - 1)
+            bin_counts[bin_idx] += 1
+        
+        # Calculate entropy
+        total = len(values)
+        entropy = 0.0
+        for count in bin_counts:
+            if count > 0:
+                p = count / total
+                entropy -= p * math.log2(p)
+        
+        # Normalize to [0, 1] range
+        max_entropy = math.log2(bins)
+        return entropy / max_entropy if max_entropy > 0 else 0.0
     
     def calculate_metrics(self, session_duration_seconds: float) -> Dict[str, Any]:
-        """Calculate all 10 metrics for this user."""
+        """Calculate all 9 metrics for this user."""
         metrics = {}
         
-        # 1. trades_per_day = count(PositionUpdate where size change ≠ 0)
-        # Already filtered in add_position_update
-        trades_count = len(self.position_updates)
-        days = session_duration_seconds / 86400.0  # Convert to days
-        metrics['trades_per_day'] = trades_count / days if days > 0 else 0.0
-        
-        # 2. cancel_rate = CancelOrder / LimitOrder
+        # 1. cancel_rate = CancelOrder / LimitOrder
         metrics['cancel_rate'] = (
             self.cancel_orders / self.limit_orders 
             if self.limit_orders > 0 else 0.0
         )
         
-        # 3. burstiness = std(inter_event_time) / mean(inter_event_time)
+        # 2. burstiness = std(inter_event_time) / mean(inter_event_time)
         if len(self.trade_times) > 1:
             sorted_times = sorted(self.trade_times)
             inter_times = [
@@ -196,31 +239,31 @@ class UserMetrics:
         else:
             metrics['burstiness'] = 0.0
         
-        # 4. avg_leverage = mean(leverage)
+        # 3. avg_leverage = mean(leverage)
         metrics['avg_leverage'] = (
             statistics.mean(self.leverage_history) 
             if self.leverage_history else 0.0
         )
         
-        # 5. max_leverage = max(leverage)
+        # 4. max_leverage = max(leverage)
         metrics['max_leverage'] = (
             max(self.leverage_history) 
             if self.leverage_history else 0.0
         )
         
-        # 6. leverage_volatility = std(leverage)
+        # 5. leverage_volatility = std(leverage)
         metrics['leverage_volatility'] = (
             statistics.stdev(self.leverage_history) 
             if len(self.leverage_history) > 1 else 0.0
         )
         
-        # 7. margin_delta_rate = mean(|Δmargin|)
+        # 6. margin_delta_rate = mean(|Δmargin|)
         metrics['margin_delta_rate'] = (
             statistics.mean(self.margin_deltas) 
             if self.margin_deltas else 0.0
         )
         
-        # 8. holding_time = close_time - open_time (average)
+        # 7. holding_time = close_time - open_time (average)
         if self.closed_positions:
             avg_holding = statistics.mean([p['holding_time'] for p in self.closed_positions])
             metrics['avg_holding_time_seconds'] = avg_holding
@@ -229,18 +272,109 @@ class UserMetrics:
             metrics['avg_holding_time_seconds'] = 0.0
             metrics['avg_holding_time_hours'] = 0.0
         
-        # 9. long_short_ratio = long_volume / short_volume
+        # 8. long_short_ratio = long_volume / short_volume
         metrics['long_short_ratio'] = (
             self.long_volume / self.short_volume 
             if self.short_volume > 0 else (float('inf') if self.long_volume > 0 else 0.0)
         )
         
-        # 10. flip_rate = direction_changes / trades
+        # 9. flip_rate = direction_changes / trades
         total_trades = len(self.trades) + len(self.position_updates)
         metrics['flip_rate'] = (
             self.direction_changes / total_trades 
             if total_trades > 0 else 0.0
         )
+        
+        # Bot detection metrics
+        # Calculate inter-event times for timing analysis
+        inter_event_times = []
+        if len(self.trade_times) > 1:
+            sorted_times = sorted(self.trade_times)
+            inter_event_times = [
+                sorted_times[i+1] - sorted_times[i] 
+                for i in range(len(sorted_times) - 1)
+            ]
+        
+        # timing_cv: std(inter_event_time) < 0.1s indicates bot-like consistency
+        # Calculate coefficient of variation: CV = std/mean
+        timing_cv = 1.0  # Default to high variation (human-like)
+        if inter_event_times and len(inter_event_times) > 1:
+            std_inter = statistics.stdev(inter_event_times)
+            mean_inter = statistics.mean(inter_event_times)
+            if mean_inter > 0:
+                timing_cv = std_inter / mean_inter
+                # If std < 0.1s, timing is very consistent (bot-like)
+                # The CV will naturally be low, which gives high (1 - timing_cv) score
+        
+        # size_entropy = entropy of trade sizes
+        size_entropy = self._calculate_entropy(self.trade_sizes, bins=10) if self.trade_sizes else 1.0
+        
+        # session_entropy = entropy of when events happen during the session
+        session_entropy = 1.0
+        if len(self.all_event_times) > 1 and session_duration_seconds > 0:
+            # Normalize event times to [0, 1] relative to session
+            session_start = min(self.all_event_times)
+            session_normalized_times = [
+                (t - session_start) / session_duration_seconds 
+                for t in self.all_event_times
+            ]
+            # Clamp to [0, 1]
+            session_normalized_times = [max(0.0, min(1.0, t)) for t in session_normalized_times]
+            session_entropy = self._calculate_entropy(session_normalized_times, bins=10)
+        
+        # reaction_time = time between order and fill (approximate using consecutive events)
+        reaction_times = []
+        if len(self.order_timestamps) > 0 and len(self.trade_times) > 0:
+            # Match orders to nearest fills
+            sorted_orders = sorted(self.order_timestamps)
+            sorted_trades = sorted(self.trade_times)
+            
+            for order_time in sorted_orders:
+                # Find nearest trade after this order
+                for trade_time in sorted_trades:
+                    if trade_time >= order_time:
+                        reaction_times.append(trade_time - order_time)
+                        break
+            
+            # Fallback: use inter-event times if no order-trade pairs
+            if not reaction_times and len(self.all_event_times) > 1:
+                sorted_all = sorted(self.all_event_times)
+                reaction_times = [
+                    sorted_all[i+1] - sorted_all[i]
+                    for i in range(len(sorted_all) - 1)
+                ]
+        
+        # no_behavior_shift = constant reaction_time (low CV = high score)
+        reaction_time_cv = 1.0  # Default to high variation (human-like)
+        if reaction_times and len(reaction_times) > 1:
+            mean_rt = statistics.mean(reaction_times)
+            if mean_rt > 0:
+                std_rt = statistics.stdev(reaction_times) if len(reaction_times) > 1 else 0.0
+                reaction_time_cv = std_rt / mean_rt if mean_rt > 0 else 1.0
+        
+        no_behavior_shift = max(0.0, min(1.0, 1.0 - reaction_time_cv))
+        
+        # Calculate bot_score using the formula:
+        # bot_score = 0.35 * (1 - timing_cv) + 0.25 * (1 - size_entropy) + 
+        #             0.20 * (1 - session_entropy) + 0.20 * no_behavior_shift
+        # Lower timing_cv, size_entropy, session_entropy = more bot-like (higher score)
+        bot_score = (
+            0.35 * max(0.0, min(1.0, 1.0 - timing_cv)) +
+            0.25 * max(0.0, min(1.0, 1.0 - size_entropy)) +
+            0.20 * max(0.0, min(1.0, 1.0 - session_entropy)) +
+            0.20 * no_behavior_shift
+        )
+        
+        metrics['bot_score'] = bot_score
+        
+        # Add "Bot" label if bot_score > BOT_SCORE
+        if bot_score > BOT_SCORE:
+            if "Bot" not in self.labels:
+                self.labels.append("Bot")
+        else:
+            # Remove Bot label if score drops
+            if "Bot" in self.labels:
+                self.labels.remove("Bot")
         
         # Additional stats
         metrics['total_trades'] = total_trades
@@ -252,6 +386,8 @@ class UserMetrics:
         metrics['long_volume'] = self.long_volume
         metrics['short_volume'] = self.short_volume
         metrics['direction_changes'] = self.direction_changes
+        metrics['total_orders'] = self.limit_orders + self.cancel_orders
+        metrics['labels'] = self.labels.copy()
         
         return metrics
 
@@ -305,6 +441,8 @@ class MetricsTracker:
         
         # Track discovered users
         self.tracked_users = set()
+        # Track users we've already subscribed to
+        self.subscribed_users = set()
         
         # Session tracking
         self.start_time = None
@@ -356,7 +494,7 @@ class MetricsTracker:
             # Write header
             header = {
                 "type": "header",
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
                 "recorder_version": "0.1.0",
                 "description": "Hyperliquid activity log - all events (trades, orders, positions, etc.)"
             }
@@ -447,6 +585,14 @@ class MetricsTracker:
                         user_metrics = self._get_user(user)
                         user_metrics.add_trade(timestamp, coin, side, size)
                         self.tracked_users.add(user)
+                        
+                        # Subscribe to user events immediately when user is discovered
+                        if user not in self.subscribed_users and self.ws:
+                            try:
+                                self._subscribe_to_user_events(self.ws, user)
+                                self.subscribed_users.add(user)
+                            except Exception as e:
+                                print(f"Error subscribing to events for new user {user[:10]}...: {e}")
             
             # Print progress every 10 new users
             if new_users_found and len(self.user_metrics) % 10 == 0:
@@ -498,7 +644,7 @@ class MetricsTracker:
                 elif event_type in ["order", "orderUpdate", "limitOrder", "marketOrder", "cancelOrder"]:
                     self.stats["orders"] += 1
                     order_type = event.get("orderType", event_type)
-                    user_metrics.add_order_event(order_type)
+                    user_metrics.add_order_event(order_type, timestamp)
                 
                 # Withdrawal/Deposit
                 elif event_type in ["withdrawal", "deposit", "transfer"]:
@@ -555,6 +701,9 @@ class MetricsTracker:
         """Handle WebSocket close."""
         print(f"WebSocket closed: {close_status_code} - {close_msg}")
         if self.running:
+            # Clear subscribed users so they can be resubscribed on reconnect
+            with self.lock:
+                self.subscribed_users.clear()
             time.sleep(2)
             self._start_websocket()
     
@@ -583,19 +732,26 @@ class MetricsTracker:
                 print(f"Error subscribing to {coin}: {e}")
         
         print(f"Subscribed to {subscribed} trade streams. Discovering users...")
-        print("Waiting for trades to discover users...")
+        print("Will automatically subscribe to userEvents and userFills for discovered users...")
     
     def _subscribe_to_user_events(self, ws, user: str):
-        """Subscribe to user-specific events."""
+        """Subscribe to user-specific events (userEvents and userFills)."""
         try:
             # Subscribe to user events (position updates, orders, etc.)
-            subscribe_msg = {
+            subscribe_msg_events = {
                 "method": "subscribe",
                 "subscription": {"type": "userEvents", "user": user}
             }
-            ws.send(json.dumps(subscribe_msg))
+            ws.send(json.dumps(subscribe_msg_events))
+            
+            # Subscribe to user fills
+            subscribe_msg_fills = {
+                "method": "subscribe",
+                "subscription": {"type": "userFills", "user": user}
+            }
+            ws.send(json.dumps(subscribe_msg_fills))
         except Exception as e:
-            print(f"Error subscribing to user events for {user[:10]}...: {e}")
+            print(f"Error subscribing to user events/fills for {user[:10]}...: {e}")
     
     def _start_websocket(self):
         """Start WebSocket connection."""
@@ -633,15 +789,18 @@ class MetricsTracker:
                 if ws_connected:
                     with self.lock:
                         # Get users that have been discovered but not yet subscribed
-                        subscribed_users = set(self.user_metrics.keys())
-                        new_users = self.tracked_users - subscribed_users
+                        new_users = self.tracked_users - self.subscribed_users
                         
                         if new_users:
                             users_to_subscribe = list(new_users)[:10]  # Limit to 10 at a time
                             print(f"Subscribing to events for {len(users_to_subscribe)} new users...")
                             for user in users_to_subscribe:
-                                self._subscribe_to_user_events(self.ws, user)
-                                time.sleep(0.2)
+                                try:
+                                    self._subscribe_to_user_events(self.ws, user)
+                                    self.subscribed_users.add(user)
+                                    time.sleep(0.2)
+                                except Exception as e:
+                                    print(f"Error subscribing to events for {user[:10]}...: {e}")
                 else:
                     # WebSocket not connected, wait longer
                     time.sleep(10)
@@ -725,7 +884,7 @@ class MetricsTracker:
             # Write footer
             footer = {
                 "type": "footer",
-                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
                 "statistics": self.stats,
                 "total_users": len(self.user_metrics)
             }
@@ -773,7 +932,7 @@ class MetricsTracker:
                     'session_duration_seconds': session_duration,
                     'total_users': 0,
                     'total_users_discovered': len(self.tracked_users),
-                    'generated_at': datetime.utcnow().isoformat() + 'Z',
+                    'generated_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
                     'users': []
                 }, f, indent=2)
             print(f"\nEmpty report saved to: {report_file}")
@@ -808,7 +967,7 @@ class MetricsTracker:
                     'total_users_discovered': len(self.tracked_users),
                     'users_shown': len(filtered_reports),
                     'filter_applied': f'users_with_more_than_{TOTAL_TRADES_THRESHOLD}_trades',
-                    'generated_at': datetime.utcnow().isoformat() + 'Z',
+                    'generated_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
                     'users': filtered_reports
                 }, f, indent=2)
             print(f"\nReport saved to: {report_file} (filtered, showing only users with >{TOTAL_TRADES_THRESHOLD} trades)")
@@ -828,21 +987,28 @@ class MetricsTracker:
             print(f"\n{'=' * 80}")
             print(f"User #{i}: {user}")
             print(f"{'=' * 80}")
-            print(f"1.  trades_per_day:           {report['trades_per_day']:.2f}")
-            print(f"2.  cancel_rate:              {report['cancel_rate']:.4f}")
-            print(f"3.  burstiness:                {report['burstiness']:.4f}")
-            print(f"4.  avg_leverage:             {report['avg_leverage']:.2f}x")
-            print(f"5.  max_leverage:             {report['max_leverage']:.2f}x")
-            print(f"6.  leverage_volatility:      {report['leverage_volatility']:.4f}")
-            print(f"7.  margin_delta_rate:        ${report['margin_delta_rate']:.2f}")
-            print(f"8.  avg_holding_time:          {report['avg_holding_time_hours']:.2f} hours")
-            print(f"9.  long_short_ratio:         {report['long_short_ratio']:.4f}")
-            print(f"10. flip_rate:                {report['flip_rate']:.4f}")
+            print(f"1.  cancel_rate:              {report['cancel_rate']:.4f}")
+            print(f"2.  burstiness:                {report['burstiness']:.4f}")
+            print(f"3.  avg_leverage:             {report['avg_leverage']:.2f}x")
+            print(f"4.  max_leverage:             {report['max_leverage']:.2f}x")
+            print(f"5.  leverage_volatility:      {report['leverage_volatility']:.4f}")
+            print(f"6.  margin_delta_rate:        ${report['margin_delta_rate']:.2f}")
+            print(f"7.  avg_holding_time:          {report['avg_holding_time_hours']:.2f} hours")
+            print(f"8.  long_short_ratio:         {report['long_short_ratio']:.4f}")
+            print(f"9.  flip_rate:                {report['flip_rate']:.4f}")
+            print(f"10. bot_score:                {report.get('bot_score', 0.0):.4f}")
+            
+            # Show labels if any
+            labels = report.get('labels', [])
+            if labels:
+                print(f"\nLabels: {', '.join(labels)}")
+            
             print(f"\nAdditional Stats:")
             print(f"    Total trades:             {report['total_trades']}")
             print(f"    Position updates:         {report['total_position_updates']}")
             print(f"    Closed positions:         {report['total_closed_positions']}")
             print(f"    Open positions:           {report['open_positions']}")
+            print(f"    Total orders:             {report['total_orders']}")
             print(f"    Limit orders:             {report['limit_orders']}")
             print(f"    Cancel orders:            {report['cancel_orders']}")
             print(f"    Long volume:              {report['long_volume']:.2f}")
@@ -861,7 +1027,7 @@ class MetricsTracker:
                     'filter_applied': f'users_with_more_than_{TOTAL_TRADES_THRESHOLD}_trades_in_WATCH_COINS',
                     'trades_threshold': TOTAL_TRADES_THRESHOLD,
                     'watch_coins': WATCH_COINS,
-                    'generated_at': datetime.utcnow().isoformat() + 'Z',
+                    'generated_at': datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
                     'users': filtered_reports
             }, f, indent=2)
         
