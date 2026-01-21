@@ -34,11 +34,11 @@ import statistics
 import math
 
 
-NO_PUBLIC_API = True
+NO_PUBLIC_API = False
 API_TOKENS = [
+    "ETH",       # Ethereum
     # "HYPE",      # Hyperliquid native token
     # "BTC",       # Bitcoin
-    "ETH",       # Ethereum
     # "SOL",       # Solana
     # "AVAX",      # Avalanche
     # "OP",        # Optimism
@@ -57,6 +57,76 @@ API_TOKENS = [
     # "KNTQ",      # Kinetiq
     # "SEDA"       # SEDA Protocol token
 ]
+
+
+class CandleAggregator:
+    """Builds OHLCV candles from trade data."""
+    
+    def __init__(self, interval_seconds: int = 60):
+        """
+        Initialize candle aggregator.
+        
+        Args:
+            interval_seconds: Candle interval in seconds (default 60 = 1 minute)
+        """
+        self.interval_seconds = interval_seconds
+        self.current_candle = None
+        self.current_candle_start = None
+        
+    def add_trade(self, price: float, size: float, timestamp: float = None):
+        """
+        Add a trade to the candle aggregator.
+        
+        Args:
+            price: Trade price
+            size: Trade size
+            timestamp: Trade timestamp (defaults to current time)
+        
+        Returns:
+            Dict with candle data if a new candle was completed, None otherwise
+        """
+        if timestamp is None:
+            timestamp = time.time()
+        
+        # Calculate candle start time
+        candle_start = int(timestamp // self.interval_seconds) * self.interval_seconds
+        
+        # Check if we need to start a new candle
+        if self.current_candle is None or candle_start != self.current_candle_start:
+            # Return completed candle if exists
+            completed_candle = None
+            if self.current_candle is not None:
+                completed_candle = {
+                    'open': self.current_candle['open'],
+                    'high': self.current_candle['high'],
+                    'low': self.current_candle['low'],
+                    'close': self.current_candle['close'],
+                    'volume': self.current_candle['volume']
+                }
+            
+            # Start new candle
+            self.current_candle_start = candle_start
+            self.current_candle = {
+                'open': price,
+                'high': price,
+                'low': price,
+                'close': price,
+                'volume': size
+            }
+            
+            return completed_candle
+        else:
+            # Update current candle
+            self.current_candle['high'] = max(self.current_candle['high'], price)
+            self.current_candle['low'] = min(self.current_candle['low'], price)
+            self.current_candle['close'] = price
+            self.current_candle['volume'] += size
+            
+            return None
+    
+    def get_current_candle(self):
+        """Get the current (incomplete) candle."""
+        return self.current_candle
 
 # Constants for RPC
 MAINNET_RPC_HTTP = "https://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
@@ -200,7 +270,7 @@ def blockchain_worker(stop_event: Event, output_queue: MPQueue, rpc_url: str):
 
 
 def api_subscription_worker(stop_event: Event, output_queue: MPQueue, channel: str, coins: List[str]):
-    """Worker process for Hyperliquid API subscription (l2Book, bbo, candle, trades)."""
+    """Worker process for Hyperliquid API subscription (l2Book, bbo, trades)."""
     try:
         import websocket
         
@@ -216,12 +286,23 @@ def api_subscription_worker(stop_event: Event, output_queue: MPQueue, channel: s
             
             try:
                 data = json.loads(message)
-                # Send to main process
-                output_queue.put({
-                    "type": "api_data",
-                    "channel": channel,
-                    "data": data
-                })
+                # Debug: send message to main process for logging
+                if not stop_event.is_set():
+                    output_queue.put({
+                        "type": "debug",
+                        "source": channel,
+                        "message": f"Received message: {message[:200]}"  # First 200 chars
+                    })
+                
+                # Only process messages that match our channel or have the expected channel field
+                message_channel = data.get("channel", "")
+                # Send to main process if it's a data message (not subscription response)
+                if message_channel != "subscriptionResponse":
+                    output_queue.put({
+                        "type": "api_data",
+                        "channel": channel,
+                        "data": data
+                    })
             except Exception as e:
                 if not stop_event.is_set():
                     output_queue.put({
@@ -238,15 +319,31 @@ def api_subscription_worker(stop_event: Event, output_queue: MPQueue, channel: s
             try:
                 # Subscribe to specific coins for this channel
                 for coin in coins:
-                    if channel == "candle":
-                        subscribe_msg = {"method": "subscribe", "subscription": {"type": channel, "coin": coin, "interval": "1m"}}
-                    else:
-                        subscribe_msg = {"method": "subscribe", "subscription": {"type": channel, "coin": coin}}
+                    subscribe_msg = {"method": "subscribe", "subscription": {"type": channel, "coin": coin}}
                     try:
-                        ws.send(json.dumps(subscribe_msg))
+                        subscribe_json = json.dumps(subscribe_msg)
+                        ws.send(subscribe_json)
+                        # Notify main process that a subscription was made
+                        if not stop_event.is_set():
+                            output_queue.put({
+                                "type": "subscription_made",
+                                "source": channel,
+                                "coin": coin
+                            })
+                            # Log subscription for debugging
+                            output_queue.put({
+                                "type": "debug",
+                                "source": channel,
+                                "message": f"Subscribed to {channel} for {coin}: {subscribe_json}"
+                            })
                         time.sleep(0.1)  # Small delay between subscriptions
-                    except:
-                        pass
+                    except Exception as e:
+                        if not stop_event.is_set():
+                            output_queue.put({
+                                "type": "error",
+                                "source": channel,
+                                "error": f"Error sending subscription for {coin}: {str(e)}"
+                            })
             except Exception as e:
                 if not stop_event.is_set():
                     output_queue.put({
@@ -820,17 +917,18 @@ class WalletProfiler:
         self.trades_queue = MPQueue()
         self.l2book_queue = MPQueue()
         self.bbo_queue = MPQueue()
-        self.candle_queue = MPQueue()
         
         # Process control
         self.stop_event = Event()  # Signal to stop all processes
         self.processes = []  # List of all child processes
         
+        # Trade-based candle aggregator (builds OHLCV from trades)
+        self.candle_aggregator = {}  # coin -> CandleAggregator instance
+        
         # Market data storage (in main process)
         self.market_data = {
             'l2_book': {},  # coin -> latest order book
             'bbo': {},  # coin -> best bid/offer
-            'candle': {},  # coin -> latest candle
             'trades': []  # recent trades
         }
         self.market_data_lock = threading.Lock()  # For thread-safe access in main process
@@ -917,14 +1015,12 @@ class WalletProfiler:
                 trades_count = sum(self.api_message_stats.get("trades", {}).values()) if "trades" in self.api_message_stats else 0
                 l2book_count = sum(self.api_message_stats.get("l2Book", {}).values()) if "l2Book" in self.api_message_stats else 0
                 bbo_count = sum(self.api_message_stats.get("bbo", {}).values()) if "bbo" in self.api_message_stats else 0
-                candle_count = sum(self.api_message_stats.get("candle", {}).values()) if "candle" in self.api_message_stats else 0
-                
                 print(f"\n[{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC] {elapsed_str} | "
                       f"Wallets: {wallet_count} | "
                       f"Trades: {trades_count} | "
                       f"l2Book: {l2book_count} | "
                       f"bbo: {bbo_count} | "
-                      f"candle: {candle_count}")
+                      f"Candles: built from trades")
                 
                 status_log = {
                     "type": "status",
@@ -935,7 +1031,7 @@ class WalletProfiler:
                     "trades_count": trades_count,
                     "l2book_count": l2book_count,
                     "bbo_count": bbo_count,
-                    "candle_count": candle_count
+                    "candles": "built_from_trades"
                 }
                 # Queue log write instead of blocking
                 try:
@@ -1139,6 +1235,15 @@ class WalletProfiler:
     def _process_queue_messages(self):
         """Process messages from all process queues. Returns True if messages were processed."""
         processed_any = False
+        # Debug: Check queue sizes periodically (every 100 calls to avoid spam)
+        if not hasattr(self, '_queue_check_counter'):
+            self._queue_check_counter = 0
+        self._queue_check_counter += 1
+        if self._queue_check_counter % 100 == 0:
+            trades_size = self.trades_queue.qsize() if hasattr(self.trades_queue, 'qsize') else 'unknown'
+            bbo_size = self.bbo_queue.qsize() if hasattr(self.bbo_queue, 'qsize') else 'unknown'
+            l2book_size = self.l2book_queue.qsize() if hasattr(self.l2book_queue, 'qsize') else 'unknown'
+            print(f"[QUEUE SIZES] trades={trades_size}, bbo={bbo_size}, l2Book={l2book_size}")
         
         # Process blockchain queue (limit iterations)
         for _ in range(50):  # Limit to prevent infinite processing
@@ -1162,8 +1267,7 @@ class WalletProfiler:
         queues = [
             (self.trades_queue, "trades"),
             (self.l2book_queue, "l2Book"),
-            (self.bbo_queue, "bbo"),
-            (self.candle_queue, "candle")
+            (self.bbo_queue, "bbo")
         ]
         
         for queue, channel in queues:
@@ -1173,11 +1277,25 @@ class WalletProfiler:
                         break
                     msg = queue.get_nowait()
                     processed_any = True
+                    msg_type = msg.get("type", "unknown")
+                    print(f"[QUEUE] Received {msg_type} message from {channel} queue")  # Debug: verify queue reading
                     if msg.get("type") == "api_data":
                         self._process_api_message(msg.get("data"), channel)
+                    elif msg.get("type") == "subscription_made":
+                        # Track subscription count
+                        self.total_subscriptions_made += 1
+                        print(f"[SUB] Subscription made! Total: {self.total_subscriptions_made}")
                     elif msg.get("type") == "error":
-                        self._log(f"{channel} process error: {msg.get('error')}")
-                except:
+                        error_msg = f"{channel} process error: {msg.get('error')}"
+                        self._log(error_msg)
+                        print(f"[ERROR] {error_msg}")
+                    elif msg.get("type") == "debug":
+                        # Log debug messages (subscriptions, etc.)
+                        debug_msg = f"{channel} debug: {msg.get('message')}"
+                        self._log(debug_msg)
+                        print(f"[DEBUG] {debug_msg}")  # Also print to console for immediate visibility
+                except Exception as e:
+                    print(f"[QUEUE ERROR] Error processing {channel} queue: {e}")
                     break
         
         return processed_any
@@ -1191,45 +1309,43 @@ class WalletProfiler:
         if data.get("channel") == "subscriptionResponse":
             return
         
+        # Check the message's channel field (from Hyperliquid)
+        message_channel = data.get("channel", "")
+        
+        # Process based on the message's channel field (from Hyperliquid), not the worker's channel
         with self.market_data_lock:
             # Handle l2Book updates
-            if channel == "l2Book":
-                coin = data.get("data", {}).get("coin")
-                if coin:
-                    self.market_data['l2_book'][coin] = {
-                        'data': data.get("data"),
-                        'timestamp': time.time()
-                    }
-                    if channel not in self.api_message_stats:
-                        self.api_message_stats[channel] = {}
-                    self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+            if message_channel == "l2Book" and "data" in data:
+                l2book_data = data.get("data", {})
+                if isinstance(l2book_data, dict):
+                    coin = l2book_data.get("coin")
+                    if coin:
+                        self.market_data['l2_book'][coin] = {
+                            'data': l2book_data,
+                            'timestamp': time.time()
+                        }
+                        if channel not in self.api_message_stats:
+                            self.api_message_stats[channel] = {}
+                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
             
             # Handle bbo updates
-            elif channel == "bbo":
-                coin = data.get("data", {}).get("coin")
-                if coin:
-                    self.market_data['bbo'][coin] = {
-                        'data': data.get("data"),
-                        'timestamp': time.time()
-                    }
-                    if channel not in self.api_message_stats:
-                        self.api_message_stats[channel] = {}
-                    self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+            elif message_channel == "bbo" and "data" in data:
+                bbo_data = data.get("data", {})
+                if isinstance(bbo_data, dict):
+                    coin = bbo_data.get("coin")
+                    if coin:
+                        self.market_data['bbo'][coin] = {
+                            'data': bbo_data,
+                            'timestamp': time.time()
+                        }
+                        if channel not in self.api_message_stats:
+                            self.api_message_stats[channel] = {}
+                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
             
-            # Handle candle updates
-            elif channel == "candle":
-                coin = data.get("data", {}).get("coin")
-                if coin:
-                    self.market_data['candle'][coin] = {
-                        'data': data.get("data"),
-                        'timestamp': time.time()
-                    }
-                    if channel not in self.api_message_stats:
-                        self.api_message_stats[channel] = {}
-                    self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+            # Candle subscription removed - using trade-based aggregation instead
             
             # Handle trades
-            elif channel == "trades":
+            elif message_channel == "trades" and "data" in data:
                 # Check if coin is at the message level
                 message_coin = data.get("coin") or (data.get("data", {}) if isinstance(data.get("data"), dict) else {}).get("coin")
                 
@@ -1270,6 +1386,16 @@ class WalletProfiler:
                             if coin:
                                 coin = str(coin).upper()  # Normalize to uppercase
                                 self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+                                
+                                # Feed trade into candle aggregator
+                                if coin not in self.candle_aggregator:
+                                    self.candle_aggregator[coin] = CandleAggregator(interval_seconds=60)
+                                
+                                trade_price = float(trade.get("px", 0))
+                                trade_size = float(trade.get("sz", 0))
+                                trade_time = trade.get("time", time.time() * 1000) / 1000.0  # Convert ms to seconds if needed
+                                if trade_price > 0 and trade_size > 0:
+                                    self.candle_aggregator[coin].add_trade(trade_price, trade_size, trade_time)
                             else:
                                 # Log the full received message for debugging (only first few times)
                                 if self.api_message_stats[channel].get("unknown", 0) < 3:
@@ -1293,10 +1419,9 @@ class WalletProfiler:
             queue_map = {
                 "trades": self.trades_queue,
                 "l2Book": self.l2book_queue,
-                "bbo": self.bbo_queue,
-                "candle": self.candle_queue
+                "bbo": self.bbo_queue
             }
-            for channel in ["trades", "l2Book", "bbo", "candle"]:
+            for channel in ["trades", "l2Book", "bbo"]:
                 p = Process(target=api_subscription_worker, args=(self.stop_event, queue_map[channel], channel, coins))
                 p.start()
                 self.processes.append(p)
@@ -1318,7 +1443,10 @@ class WalletProfiler:
             # Get market state at trade time
             bbo = self.market_data['bbo'].get(coin, {}).get('data', {})
             l2_book = self.market_data['l2_book'].get(coin, {}).get('data', {})
-            candle = self.market_data['candle'].get(coin, {}).get('data', {})
+            # Get candle from trade aggregator instead of subscription
+            candle = None
+            if coin in self.candle_aggregator:
+                candle = self.candle_aggregator[coin].get_current_candle()
             
             # Calculate mid price from bbo
             mid_price = None

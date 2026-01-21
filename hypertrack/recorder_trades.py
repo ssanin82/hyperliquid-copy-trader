@@ -25,17 +25,17 @@ class TradeRecorder:
     MAINNET_WS_URL = "wss://api.hyperliquid.xyz/ws"
     TESTNET_WS_URL = "wss://api.hyperliquid-testnet.xyz/ws"
     
-    def __init__(self, token: str = None, output_file: str = "trades.log", testnet: bool = False):
+    def __init__(self, token: str = None, output_file: str = None, testnet: bool = False):
         """
         Initialize the trade recorder.
         
         Args:
             token: Token to record trades for (defaults to TOKEN)
-            output_file: File to write trades to
+            output_file: File to write trades to (defaults to f"trades_{TOKEN}.log")
             testnet: Use testnet endpoints
         """
         self.token = token if token is not None else TOKEN
-        self.output_file = output_file
+        self.output_file = output_file if output_file is not None else f"trades_{self.token}.log"
         self.testnet = testnet
         self.ws_url = self.TESTNET_WS_URL if testnet else self.MAINNET_WS_URL
         
