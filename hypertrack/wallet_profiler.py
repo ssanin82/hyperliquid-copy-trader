@@ -18,9 +18,13 @@ import signal
 import sys
 from datetime import datetime, UTC
 from typing import Dict, Any, Optional, List
+from numpy._core.numeric import true_divide
 import requests
-import websocket
 import threading
+from queue import Queue
+import multiprocessing
+from multiprocessing import Process, Queue as MPQueue, Event, Manager
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import torch
 import torch.nn as nn
@@ -30,29 +34,280 @@ import statistics
 import math
 
 
-NO_PUBLIC_API = False
+NO_PUBLIC_API = True
 API_TOKENS = [
-    "HYPE",      # Hyperliquid native token
-    "BTC",       # Bitcoin
+    # "HYPE",      # Hyperliquid native token
+    # "BTC",       # Bitcoin
     "ETH",       # Ethereum
-    "SOL",       # Solana
-    "AVAX",      # Avalanche
-    "OP",        # Optimism
-    "BNB",       # Binance Coin
-    "DOGE",      # Dogecoin
-    "LINK",      # Chainlink
-    "MATIC",     # Polygon
-    "LTC",       # Litecoin
-    "ARB",       # Arbitrum
-    "FTM",       # Fantom
-    "XRP",       # Ripple
-    "ETC",       # Ethereum Classic
-    "APE",       # ApeCoin
-    "PUMP",      # Pump token (high volume meme token) 
-    "PURR",      # Hypurr Fun / PURR
-    "KNTQ",      # Kinetiq
-    "SEDA"       # SEDA Protocol token
+    # "SOL",       # Solana
+    # "AVAX",      # Avalanche
+    # "OP",        # Optimism
+    # "BNB",       # Binance Coin
+    # "DOGE",      # Dogecoin
+    # "LINK",      # Chainlink
+    # "MATIC",     # Polygon
+    # "LTC",       # Litecoin
+    # "ARB",       # Arbitrum
+    # "FTM",       # Fantom
+    # "XRP",       # Ripple
+    # "ETC",       # Ethereum Classic
+    # "APE",       # ApeCoin
+    # "PUMP",      # Pump token (high volume meme token) 
+    # "PURR",      # Hypurr Fun / PURR
+    # "KNTQ",      # Kinetiq
+    # "SEDA"       # SEDA Protocol token
 ]
+
+# Constants for RPC
+MAINNET_RPC_HTTP = "https://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
+MAINNET_RPC_WS = "wss://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
+HYPERLIQUID_API_WS = "wss://api.hyperliquid.xyz/ws"
+
+
+def blockchain_worker(stop_event: Event, output_queue: MPQueue, rpc_url: str):
+    """Worker process for blockchain subscription."""
+    try:
+        import websocket
+        import requests
+        
+        reconnect_delay = 2
+        max_reconnect_delay = 60
+        
+        def json_rpc_request(method: str, params: list) -> Optional[Dict[str, Any]]:
+            """Make JSON-RPC request."""
+            payload = {
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params,
+                "id": 1
+            }
+            try:
+                http_url = rpc_url.replace("wss://", "https://").replace("ws://", "http://")
+                response = requests.post(
+                    http_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    result = response.json()
+                    if "error" in result:
+                        return None
+                    return result.get("result")
+            except Exception:
+                return None
+        
+        def on_message(ws, message):
+            """Handle WebSocket messages."""
+            if stop_event.is_set():
+                ws.close()
+                return
+            
+            try:
+                data = json.loads(message)
+                
+                if "id" in data and "result" in data:
+                    # Subscription confirmed
+                    return
+                
+                if data.get("method") == "eth_subscription" and "params" in data:
+                    params = data.get("params", {})
+                    result = params.get("result")
+                    if result:
+                        block_number = result.get("number")
+                        if block_number:
+                            # Get full block
+                            block = json_rpc_request("eth_getBlockByNumber", [block_number, True])
+                            if block:
+                                # Send to main process
+                                output_queue.put({
+                                    "type": "block",
+                                    "data": block
+                                })
+            except Exception as e:
+                output_queue.put({
+                    "type": "error",
+                    "source": "blockchain",
+                    "error": str(e)
+                })
+        
+        def on_open(ws):
+            """Handle WebSocket open."""
+            nonlocal reconnect_delay
+            reconnect_delay = 2  # Reset delay on successful connection
+            
+            subscribe_msg = {
+                "jsonrpc": "2.0",
+                "method": "eth_subscribe",
+                "params": ["newHeads"],
+                "id": 1
+            }
+            ws.send(json.dumps(subscribe_msg))
+        
+        def on_error(ws, error):
+            """Handle WebSocket error."""
+            if not stop_event.is_set():
+                output_queue.put({
+                    "type": "error",
+                    "source": "blockchain",
+                    "error": str(error)
+                })
+        
+        def on_close(ws, close_status_code, close_msg):
+            """Handle WebSocket close."""
+            # Don't try to reconnect here - let the main loop handle it
+            pass
+        
+        # Main loop with reconnection
+        while not stop_event.is_set():
+            try:
+                ws = websocket.WebSocketApp(
+                    rpc_url,
+                    on_message=on_message,
+                    on_error=on_error,
+                    on_close=on_close,
+                    on_open=on_open
+                )
+                # Run with timeout to allow checking stop_event
+                ws.run_forever(ping_interval=30, ping_timeout=10)
+            except KeyboardInterrupt:
+                # Exit cleanly on interrupt
+                break
+            except Exception as e:
+                if not stop_event.is_set():
+                    output_queue.put({
+                        "type": "error",
+                        "source": "blockchain",
+                        "error": str(e)
+                    })
+            
+            # Reconnect with exponential backoff (interruptible sleep)
+            if not stop_event.is_set():
+                # Sleep in small chunks to allow quick shutdown
+                sleep_chunk = 0.5  # Check stop_event every 0.5 seconds
+                slept = 0.0
+                while slept < reconnect_delay and not stop_event.is_set():
+                    try:
+                        time.sleep(min(sleep_chunk, reconnect_delay - slept))
+                        slept += sleep_chunk
+                    except KeyboardInterrupt:
+                        # Exit immediately on interrupt
+                        break
+                reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)  # Exponential backoff, max 60s
+    except KeyboardInterrupt:
+        # Exit silently on interrupt
+        pass
+
+
+def api_subscription_worker(stop_event: Event, output_queue: MPQueue, channel: str, coins: List[str]):
+    """Worker process for Hyperliquid API subscription (l2Book, bbo, candle, trades)."""
+    try:
+        import websocket
+        
+        ws_instance = None
+        reconnect_delay = 2
+        max_reconnect_delay = 60
+        
+        def on_message(ws, message):
+            """Handle WebSocket messages."""
+            if stop_event.is_set():
+                ws.close()
+                return
+            
+            try:
+                data = json.loads(message)
+                # Send to main process
+                output_queue.put({
+                    "type": "api_data",
+                    "channel": channel,
+                    "data": data
+                })
+            except Exception as e:
+                if not stop_event.is_set():
+                    output_queue.put({
+                        "type": "error",
+                        "source": channel,
+                        "error": str(e)
+                    })
+        
+        def on_open(ws):
+            """Handle WebSocket open."""
+            nonlocal reconnect_delay
+            reconnect_delay = 2  # Reset delay on successful connection
+            
+            try:
+                # Subscribe to specific coins for this channel
+                for coin in coins:
+                    if channel == "candle":
+                        subscribe_msg = {"method": "subscribe", "subscription": {"type": channel, "coin": coin, "interval": "1m"}}
+                    else:
+                        subscribe_msg = {"method": "subscribe", "subscription": {"type": channel, "coin": coin}}
+                    try:
+                        ws.send(json.dumps(subscribe_msg))
+                        time.sleep(0.1)  # Small delay between subscriptions
+                    except:
+                        pass
+            except Exception as e:
+                if not stop_event.is_set():
+                    output_queue.put({
+                        "type": "error",
+                        "source": channel,
+                        "error": f"Error during subscription: {str(e)}"
+                    })
+        
+        def on_error(ws, error):
+            """Handle WebSocket error."""
+            if not stop_event.is_set():
+                output_queue.put({
+                    "type": "error",
+                    "source": channel,
+                    "error": str(error)
+                })
+        
+        def on_close(ws, close_status_code, close_msg):
+            """Handle WebSocket close."""
+            # Don't try to reconnect here - let the main loop handle it
+            pass
+        
+            # Main loop with reconnection
+            while not stop_event.is_set():
+                try:
+                    ws_instance = websocket.WebSocketApp(
+                        HYPERLIQUID_API_WS,
+                        on_message=on_message,
+                        on_error=on_error,
+                        on_close=on_close,
+                        on_open=on_open
+                    )
+                    # Run with timeout to allow checking stop_event
+                    ws_instance.run_forever(ping_interval=30, ping_timeout=10)
+                except KeyboardInterrupt:
+                    # Exit cleanly on interrupt
+                    break
+                except Exception as e:
+                    if not stop_event.is_set():
+                        output_queue.put({
+                            "type": "error",
+                            "source": channel,
+                            "error": str(e)
+                        })
+            
+            # Reconnect with exponential backoff (interruptible sleep)
+            if not stop_event.is_set():
+                # Sleep in small chunks to allow quick shutdown
+                sleep_chunk = 0.5  # Check stop_event every 0.5 seconds
+                slept = 0.0
+                while slept < reconnect_delay and not stop_event.is_set():
+                    try:
+                        time.sleep(min(sleep_chunk, reconnect_delay - slept))
+                        slept += sleep_chunk
+                    except KeyboardInterrupt:
+                        # Exit immediately on interrupt
+                        break
+                reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)  # Exponential backoff, max 60s
+    except KeyboardInterrupt:
+        # Exit silently on interrupt
+        pass
 
 
 class WalletFeatures:
@@ -520,11 +775,6 @@ class WalletDataset(Dataset):
 class WalletProfiler:
     """Profiles wallets using ML and blockchain data."""
     
-    MAINNET_RPC_HTTP = "https://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
-    MAINNET_RPC_WS = "wss://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
-    # Hyperliquid API WebSocket for market data
-    HYPERLIQUID_API_WS = "wss://api.hyperliquid.xyz/ws"
-    HYPERLIQUID_API_HTTP = "https://api.hyperliquid.xyz"
     
     def __init__(self, log_file: str = "wallet_profiling.log", model_file: str = "wallet_model.pt"):
         self.log_file = log_file
@@ -564,23 +814,28 @@ class WalletProfiler:
         self.feature_mean = None
         self.feature_std = None
         
-        # WebSocket (blockchain RPC)
-        self.ws = None
-        self.ws_thread = None
+        # Multiprocessing setup
+        # Process queues for receiving data from child processes
+        self.blockchain_queue = MPQueue()
+        self.trades_queue = MPQueue()
+        self.l2book_queue = MPQueue()
+        self.bbo_queue = MPQueue()
+        self.candle_queue = MPQueue()
         
-        # Hyperliquid API WebSocket for market data
-        self.api_ws = None
-        self.api_ws_thread = None
+        # Process control
+        self.stop_event = Event()  # Signal to stop all processes
+        self.processes = []  # List of all child processes
         
-        # Market data storage
+        # Market data storage (in main process)
         self.market_data = {
             'l2_book': {},  # coin -> latest order book
             'bbo': {},  # coin -> best bid/offer
             'candle': {},  # coin -> latest candle
-            'all_mids': {},  # coin -> mid price
             'trades': []  # recent trades
         }
-        self.market_data_lock = threading.Lock()
+        self.market_data_lock = threading.Lock()  # For thread-safe access in main process
+        
+        # Shared state
         self.available_coins = []  # List of all available coins
         self.coins_subscribed = set()  # Track which coins we've subscribed to
         self.api_connection_count = 0  # Track number of API WebSocket connections
@@ -590,6 +845,16 @@ class WalletProfiler:
         # Statistics for final report
         self.api_message_stats = {}  # {channel: {coin: count}} - messages per channel per token
         self.wallets_in_trades = set()  # Wallets detected on-chain that were involved in API trades
+        
+        # ERC-20 Transfer event signature (keccak256("Transfer(address,address,uint256)"))
+        self.ERC20_TRANSFER_SIG = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+        
+        # Non-blocking I/O
+        self.log_queue = Queue()  # Queue for async log writes
+        self.log_thread = None  # Background thread for log writes
+        self.rpc_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="rpc")  # Thread pool for RPC calls
+        self.rpc_futures = {}  # Track RPC futures
+        self.rpc_executor_shutdown = False  # Flag to prevent new RPC requests during shutdown
     
     def _format_elapsed_time(self, elapsed_seconds: float) -> str:
         """Format elapsed time as 'X hours, Y minutes, Z seconds passed'."""
@@ -607,6 +872,38 @@ class WalletProfiler:
         
         return ", ".join(parts) + " passed"
     
+    def _log_writer_thread(self):
+        """Background thread for writing logs to file."""
+        while self.running or not self.log_queue.empty():
+            try:
+                # Get log entry with timeout
+                try:
+                    log_entry = self.log_queue.get(timeout=0.5)  # Shorter timeout
+                except:
+                    # Timeout - check if we should exit
+                    if not self.running and self.log_queue.empty():
+                        break
+                    continue
+                
+                if log_entry is None:  # Poison pill
+                    break
+                
+                if self.file_handle:
+                    try:
+                        self.file_handle.write(log_entry + "\n")
+                        # Only flush every 10 writes or on important messages
+                        if self.log_queue.qsize() == 0 or "ERROR" in log_entry or "WARNING" in log_entry:
+                            self.file_handle.flush()
+                    except (ValueError, OSError):
+                        pass
+                
+                self.log_queue.task_done()
+            except:
+                # Timeout or queue empty, continue
+                if not self.running and self.log_queue.empty():
+                    break
+                continue
+    
     def _periodic_status_log(self):
         """Log elapsed time every minute."""
         while self.running:
@@ -615,23 +912,39 @@ class WalletProfiler:
                 elapsed = time.time() - self.strategy_start_time
                 elapsed_str = self._format_elapsed_time(elapsed)
                 wallet_count = len(self.wallets)
-                print(f"\n[{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC] {elapsed_str} | Wallets detected: {wallet_count}")
-                if self.file_handle:
-                    try:
-                        status_log = {
-                            "type": "status",
-                            "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
-                            "elapsed_time": elapsed,
-                            "elapsed_time_formatted": elapsed_str,
-                            "wallet_count": wallet_count
-                        }
-                        self.file_handle.write(json.dumps(status_log, separators=(',', ':')) + "\n")
-                        self.file_handle.flush()
-                    except (ValueError, OSError):
-                        pass
+                
+                # Count messages per channel
+                trades_count = sum(self.api_message_stats.get("trades", {}).values()) if "trades" in self.api_message_stats else 0
+                l2book_count = sum(self.api_message_stats.get("l2Book", {}).values()) if "l2Book" in self.api_message_stats else 0
+                bbo_count = sum(self.api_message_stats.get("bbo", {}).values()) if "bbo" in self.api_message_stats else 0
+                candle_count = sum(self.api_message_stats.get("candle", {}).values()) if "candle" in self.api_message_stats else 0
+                
+                print(f"\n[{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC] {elapsed_str} | "
+                      f"Wallets: {wallet_count} | "
+                      f"Trades: {trades_count} | "
+                      f"l2Book: {l2book_count} | "
+                      f"bbo: {bbo_count} | "
+                      f"candle: {candle_count}")
+                
+                status_log = {
+                    "type": "status",
+                    "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
+                    "elapsed_time": elapsed,
+                    "elapsed_time_formatted": elapsed_str,
+                    "wallet_count": wallet_count,
+                    "trades_count": trades_count,
+                    "l2book_count": l2book_count,
+                    "bbo_count": bbo_count,
+                    "candle_count": candle_count
+                }
+                # Queue log write instead of blocking
+                try:
+                    self.log_queue.put(json.dumps(status_log, separators=(',', ':')), block=False)
+                except:
+                    pass
         
     def _log(self, message: str, data: Optional[Dict] = None):
-        """Log message and data."""
+        """Log message and data (non-blocking)."""
         log_entry = {
             "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
             "message": message
@@ -640,20 +953,16 @@ class WalletProfiler:
             log_entry["data"] = data
         
         print(f"[{log_entry['timestamp']}] {message}")
-        if self.file_handle:
-            try:
-                self.file_handle.write(json.dumps(log_entry, separators=(',', ':')) + "\n")
-                self.file_handle.flush()
-            except (ValueError, OSError):
-                # File is closed or error writing, ignore
-                pass
+        # Queue log write instead of blocking on file I/O
+        try:
+            log_str = json.dumps(log_entry, separators=(',', ':'))
+            self.log_queue.put(log_str, block=False)
+        except:
+            # Queue full, skip this log entry
+            pass
     
-    def _json_rpc_request(self, method: str, params: list) -> Optional[Dict[str, Any]]:
-        """Make JSON-RPC request."""
-        if self.rpc_start_time is None:
-            self.rpc_start_time = time.time()
-        self.rpc_call_count += 1
-        
+    def _json_rpc_request_sync(self, method: str, params: list) -> Optional[Dict[str, Any]]:
+        """Make JSON-RPC request (synchronous, used in thread pool)."""
         payload = {
             "jsonrpc": "2.0",
             "method": method,
@@ -663,7 +972,7 @@ class WalletProfiler:
         
         try:
             response = requests.post(
-                self.MAINNET_RPC_HTTP,
+                MAINNET_RPC_HTTP,
                 json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=10
@@ -677,12 +986,51 @@ class WalletProfiler:
             self._log(f"RPC error: {e}")
         return None
     
+    def _json_rpc_request(self, method: str, params: list, callback: Optional[callable] = None) -> Optional[Dict[str, Any]]:
+        """Make JSON-RPC request (non-blocking using thread pool)."""
+        # Check if executor is shutting down
+        if self.rpc_executor_shutdown or not self.running:
+            return None
+        
+        if self.rpc_start_time is None:
+            self.rpc_start_time = time.time()
+        self.rpc_call_count += 1
+        
+        # Submit to thread pool for non-blocking execution
+        try:
+            future = self.rpc_executor.submit(self._json_rpc_request_sync, method, params)
+        except RuntimeError as e:
+            # Executor is shutting down, ignore
+            if "cannot schedule new futures" in str(e):
+                return None
+            raise
+        
+        if callback:
+            # Async callback mode
+            def on_complete(f):
+                try:
+                    result = f.result()
+                    callback(result)
+                except Exception as e:
+                    self._log(f"RPC callback error: {e}")
+            future.add_done_callback(on_complete)
+            return None
+        else:
+            # Synchronous mode (for critical paths that need immediate result)
+            try:
+                return future.result(timeout=10)
+            except Exception as e:
+                self._log(f"RPC future error: {e}")
+                return None
+    
     def _is_eoa(self, address: str) -> bool:
-        """Check if address is EOA."""
+        """Check if address is EOA (blocking, but cached results)."""
         if not address or address == "0x" or address == "0x0":
             return False
         address = address.lower()
         
+        # Use synchronous call here since we need immediate result for EOA check
+        # This is acceptable since it's called during transaction processing
         code = self._json_rpc_request("eth_getCode", [address, "latest"])
         return code is None or code == "0x" or code == "" or code == "0x0"
     
@@ -770,384 +1118,191 @@ class WalletProfiler:
             if isinstance(tx, dict):
                 self._process_transaction(tx, block_timestamp)
                 
-                # Get receipt for events
+                # Get receipt for events (non-blocking)
                 tx_hash = tx.get("hash")
                 if tx_hash:
-                    receipt = self._json_rpc_request("eth_getTransactionReceipt", [tx_hash])
-                    if receipt:
-                        logs = receipt.get("logs", [])
-                        for log in logs:
-                            topics = log.get("topics", [])
-                            # Check for ERC-20 Transfer event
-                            if topics and len(topics) >= 3:
-                                event_sig = topics[0].lower() if isinstance(topics[0], str) else ""
-                                if event_sig == "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef":
-                                    self._process_erc20_transfer(log, block_timestamp)
-    
-    def _on_ws_message(self, ws, message):
-        """Handle WebSocket messages."""
-        try:
-            data = json.loads(message)
-            
-            if "id" in data and "result" in data:
-                self.subscription_id = data["result"]
-                self._log("Subscribed to new blocks", {"subscription_id": self.subscription_id})
-                return
-            
-            if data.get("method") == "eth_subscription" and "params" in data:
-                params = data.get("params", {})
-                result = params.get("result")
-                if result:
-                    block_number = result.get("number")
-                    if block_number:
-                        full_block = self._json_rpc_request("eth_getBlockByNumber", [block_number, True])
-                        if full_block:
-                            self._process_block(full_block)
-                            self._log(f"Processed block {block_number}", {"tx_count": len(full_block.get("transactions", []))})
-        except Exception as e:
-            import traceback
-            error_msg = f"Error processing message: {e}"
-            stack_trace = traceback.format_exc()
-            self._log(error_msg)
-            print(f"Stack trace:\n{stack_trace}")
-            if self.file_handle:
-                try:
-                    error_log = {
-                        "type": "error",
-                        "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
-                        "error": str(e),
-                        "stack_trace": stack_trace,
-                        "message_preview": message[:500] if message else None
-                    }
-                    self.file_handle.write(json.dumps(error_log, separators=(',', ':')) + "\n")
-                    self.file_handle.flush()
-                except:
-                    pass
-    
-    def _on_ws_open(self, ws):
-        """Handle WebSocket open."""
-        self._log("WebSocket connected")
-        subscribe_msg = {
-            "jsonrpc": "2.0",
-            "method": "eth_subscribe",
-            "params": ["newHeads"],
-            "id": 1
-        }
-        ws.send(json.dumps(subscribe_msg))
-    
-    def _on_ws_error(self, ws, error):
-        self._log(f"WebSocket error: {error}")
-    
-    def _on_ws_close(self, ws, close_status_code, close_msg):
-        self._log(f"WebSocket closed: {close_status_code}")
-        if self.running:
-            time.sleep(2)
-            self._start_websocket()
-    
-    def _start_websocket(self):
-        """Start WebSocket connection for blockchain RPC."""
-        try:
-            self.ws = websocket.WebSocketApp(
-                self.MAINNET_RPC_WS,
-                on_message=self._on_ws_message,
-                on_error=self._on_ws_error,
-                on_close=self._on_ws_close,
-                on_open=self._on_ws_open
-            )
-            def run_ws():
-                self.ws.run_forever()
-            self.ws_thread = threading.Thread(target=run_ws, daemon=True)
-            self.ws_thread.start()
-        except Exception as e:
-            self._log(f"Error starting WebSocket: {e}")
-    
-    def _on_api_ws_message(self, ws, message):
-        """Handle Hyperliquid API WebSocket messages."""
-        if NO_PUBLIC_API:
-            return
-        
-        try:
-            data = json.loads(message)
-            
-            with self.market_data_lock:
-                channel = data.get("channel", "unknown")
-                
-                # Handle l2Book updates
-                if channel == "l2Book":
-                    coin = data.get("data", {}).get("coin")
-                    if coin:
-                        # Update market data
-                        self.market_data['l2_book'][coin] = {
-                            'data': data.get("data"),
-                            'timestamp': time.time()
-                        }
-                        # Track statistics
-                        if channel not in self.api_message_stats:
-                            self.api_message_stats[channel] = {}
-                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
-                
-                # Handle bbo updates
-                elif channel == "bbo":
-                    coin = data.get("data", {}).get("coin")
-                    if coin:
-                        self.market_data['bbo'][coin] = {
-                            'data': data.get("data"),
-                            'timestamp': time.time()
-                        }
-                        # Track statistics
-                        if channel not in self.api_message_stats:
-                            self.api_message_stats[channel] = {}
-                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
-                
-                # Handle candle updates
-                elif channel == "candle":
-                    coin = data.get("data", {}).get("coin")
-                    if coin:
-                        self.market_data['candle'][coin] = {
-                            'data': data.get("data"),
-                            'timestamp': time.time()
-                        }
-                        # Track statistics
-                        if channel not in self.api_message_stats:
-                            self.api_message_stats[channel] = {}
-                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
-                
-                # Handle allMids updates
-                elif channel == "allMids":
-                    mids = data.get("data", {})
-                    if mids:
-                        self.market_data['all_mids'] = {
-                            'data': mids,
-                            'timestamp': time.time()
-                        }
-                        # Track statistics (allMids doesn't have a specific coin, count as "all")
-                        if channel not in self.api_message_stats:
-                            self.api_message_stats[channel] = {}
-                        self.api_message_stats[channel]["all"] = self.api_message_stats[channel].get("all", 0) + 1
-                        
-                        # Extract available coins from allMids, but only subscribe to API_TOKENS
-                        if isinstance(mids, dict):
-                            # Filter to only coins in API_TOKENS
-                            available_mids = {k: v for k, v in mids.items() if k in API_TOKENS}
-                            new_coins = [coin for coin in available_mids.keys() if coin not in self.coins_subscribed]
-                            if new_coins:
-                                # Only track API_TOKENS, not all discovered coins
-                                self.available_coins = [coin for coin in API_TOKENS if coin in mids.keys()]
-                                self._log(f"Discovered {len(new_coins)} new coins from API_TOKENS, subscribing to all...")
-                                # Subscribe to all new coins at once
-                                self._subscribe_to_coins(new_coins)
-                
-                # Handle trades
-                elif channel == "trades":
-                    trades = data.get("data", [])
-                    # Trades can be an array or a single object with coin field
-                    if isinstance(trades, list):
-                        trade_list = trades
-                    elif isinstance(trades, dict) and "data" in trades:
-                        trade_list = trades.get("data", [])
-                    else:
-                        trade_list = [trades] if trades else []
+                    def process_receipt_callback(receipt):
+                        """Process receipt and check event signatures."""
+                        if receipt:
+                            logs = receipt.get("logs", [])
+                            for log in logs:
+                                topics = log.get("topics", [])
+                                # Check for ERC-20 Transfer event signature
+                                if topics and len(topics) >= 3:
+                                    event_sig = topics[0].lower() if isinstance(topics[0], str) else ""
+                                    if event_sig == self.ERC20_TRANSFER_SIG:
+                                        self._process_erc20_transfer(log, block_timestamp)
                     
-                    if trade_list:
-                        # Keep last 1000 trades
-                        self.market_data['trades'].extend(trade_list)
-                        if len(self.market_data['trades']) > 1000:
-                            self.market_data['trades'] = self.market_data['trades'][-1000:]
-                        
-                        # Track statistics per coin
-                        if channel not in self.api_message_stats:
-                            self.api_message_stats[channel] = {}
-                        
-                        # Count trades per coin
-                        for trade in trade_list:
-                            if isinstance(trade, dict):
-                                coin = trade.get("coin")
-                                if coin:
-                                    self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
-                                else:
-                                    # Try to get coin from parent data structure
-                                    coin = data.get("coin")
-                                    if coin:
-                                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
-                                    else:
-                                        self.api_message_stats[channel]["unknown"] = self.api_message_stats[channel].get("unknown", 0) + 1
-                            else:
-                                self.api_message_stats[channel]["unknown"] = self.api_message_stats[channel].get("unknown", 0) + 1
-                        
-                        # Check if any wallets we're tracking are involved in these trades
-                        for trade in trade_list:
-                            if isinstance(trade, dict):
-                                self._check_wallet_trade_involvement(trade)
-        
-        except Exception as e:
-            self._log(f"Error processing API message: {e}")
-            import traceback
-            traceback.print_exc()
+                    # Non-blocking RPC call
+                    self._json_rpc_request("eth_getTransactionReceipt", [tx_hash], callback=process_receipt_callback)
     
-    def _on_api_ws_error(self, ws, error):
-        """Handle Hyperliquid API WebSocket errors."""
-        self._log(f"API WebSocket error: {error}")
-    
-    def _on_api_ws_close(self, ws, close_status_code, close_msg):
-        """Handle Hyperliquid API WebSocket close."""
-        if NO_PUBLIC_API:
-            return
+    def _process_queue_messages(self):
+        """Process messages from all process queues. Returns True if messages were processed."""
+        processed_any = False
         
-        self._log(f"API WebSocket closed: {close_status_code} (total connections: {self.api_connection_count})")
-        
-        # Check if we've exceeded the maximum before reconnecting
-        if self.api_connection_count >= self.max_api_connections:
-            self._log(f"ERROR: Reached maximum API connections ({self.max_api_connections}). Not reconnecting.")
-            print(f"\n[ERROR] Reached maximum API connections ({self.max_api_connections}). Stopping profiler.")
-            self.running = False
-            return
-        
-        if self.running and not NO_PUBLIC_API:
-            time.sleep(2)
-            self._start_api_websocket()
-    
-    def _get_available_coins(self) -> List[str]:
-        """Get list of coins to subscribe to (only API_TOKENS)."""
-        # Only subscribe to tokens in API_TOKENS list
-        return [token for token in API_TOKENS]
-    
-    def _is_ws_connected(self) -> bool:
-        """Check if WebSocket is still connected."""
-        if not self.api_ws:
-            return False
-        try:
-            if hasattr(self.api_ws, 'sock') and self.api_ws.sock:
-                return self.api_ws.sock.connected
-        except:
-            pass
-        return False
-    
-    def _subscribe_to_coins(self, coins: List[str]):
-        """Subscribe to market data streams for given coins."""
-        if not self.api_ws or not self._is_ws_connected():
-            self._log("WebSocket not connected, skipping subscription")
-            return
-        
-        subscriptions = []
-        new_coins_list = []
-        for coin in coins:
-            if coin in self.coins_subscribed:
-                continue
-            
-            subscriptions.extend([
-                {"method": "subscribe", "subscription": {"type": "l2Book", "coin": coin}},
-                {"method": "subscribe", "subscription": {"type": "bbo", "coin": coin}},
-                {"method": "subscribe", "subscription": {"type": "candle", "coin": coin, "interval": "1m"}},
-                {"method": "subscribe", "subscription": {"type": "trades", "coin": coin}},
-            ])
-            new_coins_list.append(coin)
-            self.coins_subscribed.add(coin)
-        
-        if not subscriptions:
-            return
-        
-        # Subscribe to all at once without delays
-        successful = 0
-        failed = 0
-        
-        self._log(f"Subscribing to {len(new_coins_list)} coins ({len(subscriptions)} total subscriptions)...")
-        
-        for sub in subscriptions:
-            # Extract subscription details for logging
-            subscription_info = sub.get("subscription", {})
-            coin = subscription_info.get("coin", "unknown")
-            sub_type = subscription_info.get("type", "unknown")
-            
+        # Process blockchain queue (limit iterations)
+        for _ in range(50):  # Limit to prevent infinite processing
             try:
-                # Send subscription immediately
-                self.api_ws.send(json.dumps(sub))
-                successful += 1
+                if self.blockchain_queue.empty():
+                    break
+                msg = self.blockchain_queue.get_nowait()
+                processed_any = True
+                if msg.get("type") == "block":
+                    block = msg.get("data")
+                    if block:
+                        self._process_block(block)
+                        block_number = block.get("number", "unknown")
+                        self._log(f"Processed block {block_number}", {"tx_count": len(block.get("transactions", []))})
+                elif msg.get("type") == "error":
+                    self._log(f"Blockchain process error: {msg.get('error')}")
+            except:
+                break
+        
+        # Process API queues (limit iterations per queue)
+        queues = [
+            (self.trades_queue, "trades"),
+            (self.l2book_queue, "l2Book"),
+            (self.bbo_queue, "bbo"),
+            (self.candle_queue, "candle")
+        ]
+        
+        for queue, channel in queues:
+            for _ in range(50):  # Limit to prevent infinite processing
+                try:
+                    if queue.empty():
+                        break
+                    msg = queue.get_nowait()
+                    processed_any = True
+                    if msg.get("type") == "api_data":
+                        self._process_api_message(msg.get("data"), channel)
+                    elif msg.get("type") == "error":
+                        self._log(f"{channel} process error: {msg.get('error')}")
+                except:
+                    break
+        
+        return processed_any
+    
+    def _process_api_message(self, data: Dict[str, Any], channel: str):
+        """Process API message from child process."""
+        if NO_PUBLIC_API:
+            return
+        
+        # Ignore subscription response messages
+        if data.get("channel") == "subscriptionResponse":
+            return
+        
+        with self.market_data_lock:
+            # Handle l2Book updates
+            if channel == "l2Book":
+                coin = data.get("data", {}).get("coin")
+                if coin:
+                    self.market_data['l2_book'][coin] = {
+                        'data': data.get("data"),
+                        'timestamp': time.time()
+                    }
+                    if channel not in self.api_message_stats:
+                        self.api_message_stats[channel] = {}
+                    self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+            
+            # Handle bbo updates
+            elif channel == "bbo":
+                coin = data.get("data", {}).get("coin")
+                if coin:
+                    self.market_data['bbo'][coin] = {
+                        'data': data.get("data"),
+                        'timestamp': time.time()
+                    }
+                    if channel not in self.api_message_stats:
+                        self.api_message_stats[channel] = {}
+                    self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+            
+            # Handle candle updates
+            elif channel == "candle":
+                coin = data.get("data", {}).get("coin")
+                if coin:
+                    self.market_data['candle'][coin] = {
+                        'data': data.get("data"),
+                        'timestamp': time.time()
+                    }
+                    if channel not in self.api_message_stats:
+                        self.api_message_stats[channel] = {}
+                    self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+            
+            # Handle trades
+            elif channel == "trades":
+                # Check if coin is at the message level
+                message_coin = data.get("coin") or (data.get("data", {}) if isinstance(data.get("data"), dict) else {}).get("coin")
                 
-            except (OSError, ConnectionError, AttributeError, ConnectionAbortedError) as e:
-                failed += 1
-                # Connection error - log and continue
-                error_str = str(e).lower()
-                if any(keyword in error_str for keyword in ["closed", "bad_length", "10054", "aborted", "reset"]):
-                    self._log(f"Connection error during subscription: {type(e).__name__}")
-                    self._log(f"Failed subscription details: coin='{coin}', type='{sub_type}', subscription={sub}")
-                    print(f"\n[ERROR] Connection error while subscribing to: coin='{coin}', type='{sub_type}'")
-                    print(f"[ERROR] Full subscription: {json.dumps(sub, indent=2)}")
+                trades = data.get("data", [])
+                if isinstance(trades, list):
+                    trade_list = trades
+                elif isinstance(trades, dict):
+                    # If data is a dict, check if it has a "data" field with trades
+                    if "data" in trades:
+                        trade_list = trades.get("data", [])
+                        # Also check for coin at this level
+                        if not message_coin:
+                            message_coin = trades.get("coin")
+                    else:
+                        # If data is a dict but no "data" field, treat it as a single trade
+                        trade_list = [trades]
                 else:
-                    self._log(f"Error subscribing to coin='{coin}', type='{sub_type}': {type(e).__name__}")
-            except Exception as e:
-                failed += 1
-                self._log(f"Error subscribing to coin='{coin}', type='{sub_type}': {type(e).__name__}")
-        
-        self.total_subscriptions_made += successful
-        self._log(f"Subscribed to {len(new_coins_list)} coins: {successful} subscriptions successful, {failed} failed")
-        self._log(f"Total subscriptions made so far: {self.total_subscriptions_made}")
-        self._log(f"Subscriptions: {successful} successful, {failed} failed | Total: {self.total_subscriptions_made}")
-        
-        # Verify connection is still alive after subscriptions
-        if not self._is_ws_connected():
-            self._log("WARNING: Connection lost after sending subscriptions")
-        else:
-            self._log("Connection verified: still connected after subscriptions")
+                    trade_list = [trades] if trades else []
+                
+                if trade_list:
+                    self.market_data['trades'].extend(trade_list)
+                    if len(self.market_data['trades']) > 1000:
+                        self.market_data['trades'] = self.market_data['trades'][-1000:]
+                    
+                    if channel not in self.api_message_stats:
+                        self.api_message_stats[channel] = {}
+                    
+                    for trade in trade_list:
+                        if isinstance(trade, dict):
+                            # Try multiple ways to get the coin
+                            coin = trade.get("coin") or message_coin
+                            
+                            # If still no coin, try to extract from other fields
+                            if not coin:
+                                # Check if trade has a symbol or other identifier
+                                coin = trade.get("symbol") or trade.get("pair") or trade.get("market")
+                            
+                            if coin:
+                                coin = str(coin).upper()  # Normalize to uppercase
+                                self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+                            else:
+                                # Log the full received message for debugging (only first few times)
+                                if self.api_message_stats[channel].get("unknown", 0) < 3:
+                                    self._log(f"Trade without coin field. Full message: {json.dumps(data)}", {"channel": channel, "trade": trade})
+                                self.api_message_stats[channel]["unknown"] = self.api_message_stats[channel].get("unknown", 0) + 1
+                            
+                            self._check_wallet_trade_involvement(trade)
     
-    def _on_api_ws_open(self, ws):
-        """Handle Hyperliquid API WebSocket open."""
-        if NO_PUBLIC_API:
-            self._log("Public API subscriptions disabled, closing connection")
-            ws.close()
-            return
+    def _start_processes(self):
+        """Start all subscription processes."""
+        coins = API_TOKENS if not NO_PUBLIC_API else []
         
-        self.api_connection_count += 1
-        self._log(f"Hyperliquid API WebSocket connected (connection #{self.api_connection_count})")
+        # Start blockchain process
+        p = Process(target=blockchain_worker, args=(self.stop_event, self.blockchain_queue, MAINNET_RPC_WS))
+        p.start()
+        self.processes.append(p)
+        self._log("Started blockchain subscription process")
         
-        # Check if we've exceeded the maximum connections
-        if self.api_connection_count > self.max_api_connections:
-            self._log(f"ERROR: Exceeded maximum API connections ({self.max_api_connections}). Aborting.")
-            print(f"\n[ERROR] Exceeded maximum API connections ({self.max_api_connections}). Stopping profiler.")
-            self.running = False
-            if self.api_ws:
-                self.api_ws.close()
-            return
-        
-        # First, subscribe to allMids to get all available coins
-        try:
-            subscribe_allmids = {"method": "subscribe", "subscription": {"type": "allMids"}}
-            ws.send(json.dumps(subscribe_allmids))
-            self._log("Subscribed to allMids to discover available coins")
-        except Exception as e:
-            self._log(f"Error subscribing to allMids: {e}")
-        
-        # Get coins from API_TOKENS list
-        coins = self._get_available_coins()
-        if coins:
-            self.available_coins = coins
-            self._log(f"Subscribing to all {len(coins)} tokens from API_TOKENS list...")
-            # Subscribe to all coins at once
-            self._subscribe_to_coins(coins)
-        else:
-            self._log("No tokens in API_TOKENS list to subscribe to")
+        if not NO_PUBLIC_API:
+            # Start API subscription processes
+            queue_map = {
+                "trades": self.trades_queue,
+                "l2Book": self.l2book_queue,
+                "bbo": self.bbo_queue,
+                "candle": self.candle_queue
+            }
+            for channel in ["trades", "l2Book", "bbo", "candle"]:
+                p = Process(target=api_subscription_worker, args=(self.stop_event, queue_map[channel], channel, coins))
+                p.start()
+                self.processes.append(p)
+                self._log(f"Started {channel} subscription process")
+                self.api_connection_count += 1
     
-    def _start_api_websocket(self):
-        """Start Hyperliquid API WebSocket connection."""
-        if NO_PUBLIC_API:
-            return
-        
-        try:
-            self.api_ws = websocket.WebSocketApp(
-                self.HYPERLIQUID_API_WS,
-                on_message=self._on_api_ws_message,
-                on_error=self._on_api_ws_error,
-                on_close=self._on_api_ws_close,
-                on_open=self._on_api_ws_open
-            )
-            def run_api_ws():
-                self._log("API WebSocket thread started")
-                self.api_ws.run_forever()
-                self._log("API WebSocket thread ended")
-            self.api_ws_thread = threading.Thread(target=run_api_ws, daemon=True)
-            self.api_ws_thread.start()
-            self._log("API WebSocket thread created")
-        except Exception as e:
-            self._log(f"Error starting API WebSocket: {e}")
     
     def _calculate_market_metrics(self, wallet_addr: str, trade_data: Dict[str, Any], timestamp: float):
         """Calculate market metrics for a trade and update wallet features."""
@@ -1164,12 +1319,10 @@ class WalletProfiler:
             bbo = self.market_data['bbo'].get(coin, {}).get('data', {})
             l2_book = self.market_data['l2_book'].get(coin, {}).get('data', {})
             candle = self.market_data['candle'].get(coin, {}).get('data', {})
-            all_mids = self.market_data['all_mids'].get('data', {})
             
+            # Calculate mid price from bbo
             mid_price = None
-            if coin in all_mids:
-                mid_price = all_mids[coin]
-            elif bbo:
+            if bbo:
                 bid = float(bbo.get('bid', {}).get('px', 0))
                 ask = float(bbo.get('ask', {}).get('px', 0))
                 if bid > 0 and ask > 0:
@@ -1560,23 +1713,30 @@ class WalletProfiler:
         self.running = True
         self.strategy_start_time = time.time()
         
+        # Start background log writer thread
+        self.log_thread = threading.Thread(target=self._log_writer_thread, daemon=True)
+        self.log_thread.start()
+        
         # Start periodic status logging (every minute)
         self.status_log_thread = threading.Thread(target=self._periodic_status_log, daemon=True)
         self.status_log_thread.start()
         
-        self._start_websocket()
+        # Start all subscription processes
+        self._start_processes()
         
-        # Start Hyperliquid API WebSocket for market data (if enabled)
-        if not NO_PUBLIC_API:
-            self._start_api_websocket()
-        else:
+        if NO_PUBLIC_API:
             self._log("Public API subscriptions disabled (NO_PUBLIC_API=True)")
         
         last_training = time.time()
         
         try:
+            print("Entering main loop...")
+            self._log("Entering main processing loop")
             while self.running:
-                time.sleep(1)
+                # Process messages from all queues
+                self._process_queue_messages()
+                
+                time.sleep(0.1)  # Small sleep to avoid busy waiting
                 
                 # Periodic training
                 if time.time() - last_training > training_interval:
@@ -1585,23 +1745,67 @@ class WalletProfiler:
                     last_training = time.time()
         except KeyboardInterrupt:
             self._log("Interrupted by user")
+            print("\nReceived interrupt signal...")
         finally:
             self.stop()
     
     def stop(self):
         """Stop profiling and generate report."""
+        print("\nShutting down... (this may take a moment)")
         self._log("Stopping wallet profiler")
         self.running = False
         
-        if self.ws:
-            self.ws.close()
+        # Signal all processes to stop
+        self.stop_event.set()
         
-        if self.api_ws:
-            self.api_ws.close()
+        # Mark executor as shutting down to prevent new requests
+        self.rpc_executor_shutdown = True
         
-        # Final training
+        # Wait for processes to stop (with timeout)
+        print("Stopping worker processes...")
+        for p in self.processes:
+            p.join(timeout=3)  # Reduced timeout
+            if p.is_alive():
+                print(f"Terminating process {p.pid}...")
+                p.terminate()
+                p.join(timeout=1)  # Reduced timeout
+                if p.is_alive():
+                    print(f"Killing process {p.pid}...")
+                    p.kill()
+                    p.join(timeout=1)
+        
+        # Process any remaining messages in queues (limited iterations)
+        print("Processing remaining messages...")
+        for _ in range(100):  # Limit iterations to prevent infinite loop
+            if not self._process_queue_messages():
+                break
+        
+        # Wait a bit for in-flight requests to complete
+        time.sleep(0.2)  # Reduced wait time
+        
+        # Shutdown thread pool
+        print("Shutting down thread pool...")
+        try:
+            self.rpc_executor.shutdown(wait=False)  # Don't wait, just signal shutdown
+        except:
+            pass
+        
+        # Wait for log queue to drain (non-blocking)
+        print("Draining log queue...")
+        try:
+            self.log_queue.put(None, block=False)  # Non-blocking put
+        except:
+            pass
+        if self.log_thread:
+            self.log_thread.join(timeout=2)  # Reduced timeout
+        
+        # Final training (skip if taking too long)
+        print("Final model training...")
         if len(self.wallets) > 0:
-            self._train_model()
+            try:
+                self._train_model()
+            except Exception as e:
+                self._log(f"Training failed during shutdown: {e}")
         
         # Try to load model if training didn't happen
         if self.model is None:
@@ -1616,8 +1820,13 @@ class WalletProfiler:
                 self._log(f"Could not load model: {e}")
         
         # Generate report
+        print("Generating final report...")
         if self.model is not None and self.feature_mean is not None:
-            self._generate_report()
+            try:
+                self._generate_report()
+            except Exception as e:
+                self._log(f"Report generation failed: {e}")
+                print(f"Error generating report: {e}")
         else:
             self._log("Cannot generate report - no model available")
         
@@ -1663,4 +1872,6 @@ def main():
 
 
 if __name__ == "__main__":
+    # Required for multiprocessing on Windows
+    multiprocessing.freeze_support()
     main()
