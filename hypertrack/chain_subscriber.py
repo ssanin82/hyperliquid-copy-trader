@@ -59,6 +59,12 @@ class ChainSubscriber:
         # RPC call tracking
         self.rpc_call_count = 0
         self.rpc_start_time = None
+        # Strategy start time for periodic logging
+        self.strategy_start_time = None
+        self.status_log_thread = None
+        # Strategy start time for periodic logging
+        self.strategy_start_time = None
+        self.status_log_thread = None
         
     def _log_transaction(self, tx_data: Dict[str, Any]):
         """Log a transaction to console and optionally to file."""
@@ -427,6 +433,41 @@ class ChainSubscriber:
                 traceback.print_exc()
                 time.sleep(5)
     
+    def _format_elapsed_time(self, elapsed_seconds: float) -> str:
+        """Format elapsed time as 'X hours, Y minutes, Z seconds passed'."""
+        hours = int(elapsed_seconds // 3600)
+        minutes = int((elapsed_seconds % 3600) // 60)
+        seconds = int(elapsed_seconds % 60)
+        
+        parts = []
+        if hours > 0:
+            parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        if minutes > 0:
+            parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        if seconds > 0 or len(parts) == 0:
+            parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+        
+        return ", ".join(parts) + " passed"
+    
+    def _periodic_status_log(self):
+        """Log elapsed time every minute."""
+        while self.running:
+            time.sleep(60)  # Wait 60 seconds
+            if self.running and self.strategy_start_time:
+                elapsed = time.time() - self.strategy_start_time
+                elapsed_str = self._format_elapsed_time(elapsed)
+                print(f"\n[{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC] {elapsed_str}")
+                if self.file_handle:
+                    status_log = {
+                        "type": "status",
+                        "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
+                        "elapsed_time": elapsed,
+                        "elapsed_time_formatted": elapsed_str,
+                        "transaction_count": self.transaction_count
+                    }
+                    self.file_handle.write(json.dumps(status_log, separators=(',', ':')) + "\n")
+                    self.file_handle.flush()
+    
     def _start_websocket(self):
         """Start WebSocket connection for eth_subscribe."""
         try:
@@ -478,6 +519,11 @@ class ChainSubscriber:
         print("=" * 80)
         
         self.running = True
+        self.strategy_start_time = time.time()
+        
+        # Start periodic status logging (every minute)
+        self.status_log_thread = threading.Thread(target=self._periodic_status_log, daemon=True)
+        self.status_log_thread.start()
         
         # Start WebSocket connection for eth_subscribe
         self._start_websocket()

@@ -93,8 +93,8 @@ class WalletFeatures:
         self.active_hours.add(dt.hour)
         
         # Track interactions
-        tx_from = tx_data.get("from", "").lower()
-        tx_to = tx_data.get("to", "").lower()
+        tx_from = (tx_data.get("from") or "").lower()
+        tx_to = (tx_data.get("to") or "").lower()
         if tx_from == self.address and tx_to:
             self.interacted_addresses.add(tx_to)
         elif tx_to == self.address and tx_from:
@@ -103,7 +103,7 @@ class WalletFeatures:
     def add_erc20_transfer(self, transfer_data: Dict[str, Any], timestamp: float):
         """Add an ERC-20 transfer."""
         self.erc20_transfers.append(transfer_data)
-        token_address = transfer_data.get("address", "").lower()
+        token_address = (transfer_data.get("address") or "").lower()
         if token_address:
             self.tokens_traded.add(token_address)
         
@@ -223,6 +223,85 @@ class WalletFeatures:
         features['address_diversity'] = len(self.interacted_addresses)
         
         return features
+    
+    def classify_wallet(self, features: Dict[str, float], bot_probability: float = 0.0) -> List[tuple]:
+        """
+        Classify wallet into behavior categories.
+        
+        Returns list of (category, confidence) tuples.
+        """
+        categories = []
+        
+        tx_per_day = features.get('tx_per_day', 0.0)
+        size_entropy = features.get('size_entropy', 1.0)
+        burstiness = features.get('burstiness', 0.0)
+        age_days = features.get('age_days', 0.0)
+        tx_count = features.get('tx_count', 0.0)
+        max_value = features.get('max_value', 0.0)
+        total_value = features.get('total_value', 0.0)
+        avg_value = features.get('avg_value', 0.0)
+        unique_tokens = features.get('unique_tokens', 0.0)
+        erc20_count = features.get('erc20_count', 0.0)
+        flip_rate = features.get('flip_rate', 0.0)
+        
+        # Bot classification
+        if bot_probability > 0.7:
+            categories.append(("Bot", bot_probability))
+        elif bot_probability > 0.5:
+            categories.append(("Possible Bot", bot_probability))
+        
+        # Scalper: High frequency, small sizes, high burstiness
+        if tx_per_day > 50 and size_entropy < 0.4:
+            confidence = min(1.0, (tx_per_day / 100.0) * (1.0 - size_entropy))
+            categories.append(("Scalper", confidence))
+        elif tx_per_day > 30 and size_entropy < 0.5:
+            categories.append(("Possible Scalper", 0.6))
+        
+        # HODLer: Very low frequency, old wallet
+        if tx_per_day < 0.1 and age_days > 30:
+            confidence = min(1.0, (30.0 / max(age_days, 1.0)) * (0.1 / max(tx_per_day, 0.01)))
+            categories.append(("HODLer", confidence))
+        elif tx_per_day < 0.5 and age_days > 60:
+            categories.append(("Possible HODLer", 0.6))
+        
+        # Whale: Large transaction values
+        # Calculate percentile thresholds (simplified - in production use actual percentiles)
+        if max_value > 100.0 or total_value > 1000.0:  # Adjust thresholds based on actual data
+            confidence = min(1.0, (max_value / 1000.0) if max_value > 0 else (total_value / 10000.0))
+            categories.append(("Whale", min(1.0, confidence)))
+        elif max_value > 10.0 or total_value > 100.0:
+            categories.append(("Possible Whale", 0.6))
+        
+        # Token Collector: High ERC-20 activity, many tokens
+        if unique_tokens > 10 and erc20_count > tx_count * 2:
+            confidence = min(1.0, (unique_tokens / 50.0) * (erc20_count / max(tx_count * 3, 1.0)))
+            categories.append(("Token Collector", confidence))
+        elif unique_tokens > 5 and erc20_count > tx_count:
+            categories.append(("Possible Token Collector", 0.6))
+        
+        # Active Trader (could include Swing Traders): Moderate-high frequency
+        if 1.0 <= tx_per_day <= 50 and burstiness > 0.3:
+            confidence = min(1.0, tx_per_day / 50.0)
+            categories.append(("Active Trader", confidence))
+        elif 0.5 <= tx_per_day <= 30:
+            categories.append(("Moderate Trader", 0.6))
+        
+        # Arbitrageur: Multiple tokens, high flip rate
+        if unique_tokens > 5 and flip_rate > 0.5:
+            confidence = min(1.0, (unique_tokens / 20.0) * flip_rate)
+            categories.append(("Arbitrageur", confidence))
+        elif unique_tokens > 3 and flip_rate > 0.3:
+            categories.append(("Possible Arbitrageur", 0.6))
+        
+        # Dormant: Very low activity, old wallet
+        if tx_count < 5 and age_days > 30:
+            confidence = min(1.0, (30.0 / max(age_days, 1.0)) * ((5.0 - tx_count) / 5.0))
+            categories.append(("Dormant", confidence))
+        
+        # Sort by confidence (highest first)
+        categories.sort(key=lambda x: x[1], reverse=True)
+        
+        return categories
 
 
 class WalletMTLModel(nn.Module):
@@ -371,8 +450,12 @@ class WalletProfiler:
         
         print(f"[{log_entry['timestamp']}] {message}")
         if self.file_handle:
-            self.file_handle.write(json.dumps(log_entry, separators=(',', ':')) + "\n")
-            self.file_handle.flush()
+            try:
+                self.file_handle.write(json.dumps(log_entry, separators=(',', ':')) + "\n")
+                self.file_handle.flush()
+            except (ValueError, OSError):
+                # File is closed or error writing, ignore
+                pass
     
     def _json_rpc_request(self, method: str, params: list) -> Optional[Dict[str, Any]]:
         """Make JSON-RPC request."""
@@ -414,8 +497,8 @@ class WalletProfiler:
     
     def _process_transaction(self, tx: Dict[str, Any], block_timestamp: float):
         """Process a transaction and update wallet features."""
-        tx_from = tx.get("from", "").lower()
-        tx_to = tx.get("to", "").lower()
+        tx_from = (tx.get("from") or "").lower()
+        tx_to = (tx.get("to") or "").lower()
         
         # Process from address
         if tx_from and tx_from != "0x0":
@@ -448,17 +531,39 @@ class WalletProfiler:
             return
         
         # ERC-20 Transfer: topics[1] = from, topics[2] = to
-        from_addr = "0x" + topics[1][-40:] if len(topics) > 1 else None
-        to_addr = "0x" + topics[2][-40:] if len(topics) > 2 else None
-        token_addr = log.get("address", "").lower()
+        from_addr = None
+        to_addr = None
+        
+        if len(topics) > 1 and topics[1]:
+            try:
+                topic_str = str(topics[1])
+                if len(topic_str) >= 40:
+                    from_addr = "0x" + topic_str[-40:]
+            except (TypeError, ValueError):
+                pass
+        
+        if len(topics) > 2 and topics[2]:
+            try:
+                topic_str = str(topics[2])
+                if len(topic_str) >= 40:
+                    to_addr = "0x" + topic_str[-40:]
+            except (TypeError, ValueError):
+                pass
+        
+        token_addr = (log.get("address") or "").lower()
         
         if token_addr:
             self.erc20_tokens.add(token_addr)
         
-        if from_addr and from_addr.lower() in self.wallets:
-            self.wallets[from_addr.lower()].add_erc20_transfer(log, block_timestamp)
-        if to_addr and to_addr.lower() in self.wallets:
-            self.wallets[to_addr.lower()].add_erc20_transfer(log, block_timestamp)
+        if from_addr and isinstance(from_addr, str):
+            from_addr_lower = from_addr.lower()
+            if from_addr_lower in self.wallets:
+                self.wallets[from_addr_lower].add_erc20_transfer(log, block_timestamp)
+        
+        if to_addr and isinstance(to_addr, str):
+            to_addr_lower = to_addr.lower()
+            if to_addr_lower in self.wallets:
+                self.wallets[to_addr_lower].add_erc20_transfer(log, block_timestamp)
     
     def _process_block(self, block: Dict[str, Any]):
         """Process a block and extract wallet activity."""
@@ -505,7 +610,24 @@ class WalletProfiler:
                             self._process_block(full_block)
                             self._log(f"Processed block {block_number}", {"tx_count": len(full_block.get("transactions", []))})
         except Exception as e:
-            self._log(f"Error processing message: {e}")
+            import traceback
+            error_msg = f"Error processing message: {e}"
+            stack_trace = traceback.format_exc()
+            self._log(error_msg)
+            print(f"Stack trace:\n{stack_trace}")
+            if self.file_handle:
+                try:
+                    error_log = {
+                        "type": "error",
+                        "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
+                        "error": str(e),
+                        "stack_trace": stack_trace,
+                        "message_preview": message[:500] if message else None
+                    }
+                    self.file_handle.write(json.dumps(error_log, separators=(',', ':')) + "\n")
+                    self.file_handle.flush()
+                except:
+                    pass
     
     def _on_ws_open(self, ws):
         """Handle WebSocket open."""
@@ -661,14 +783,20 @@ class WalletProfiler:
                 features_tensor = torch.FloatTensor(features_normalized).unsqueeze(0).to(self.device)
                 outputs = self.model(features_tensor)
                 
+                bot_probability = float(outputs['bot'].cpu().item())
+                
+                # Classify wallet into behavior categories
+                categories = wallet.classify_wallet(features, bot_probability)
+                
                 result = {
                     'address': addr,
                     'style_score': outputs['style'].cpu().numpy()[0].tolist(),
                     'risk_score': float(outputs['risk'].cpu().item()),
                     'profitability_score': float(outputs['profitability'].cpu().item()),
-                    'bot_probability': float(outputs['bot'].cpu().item()),
+                    'bot_probability': bot_probability,
                     'influence_score': float(outputs['influence'].cpu().item()),
                     'sophistication_score': float(outputs['sophistication'].cpu().item()),
+                    'categories': categories,
                     'tx_count': features['tx_count'],
                     'age_days': features['age_days']
                 }
@@ -692,12 +820,25 @@ class WalletProfiler:
             for i, result in enumerate(sorted(wallet_results, key=lambda x: x['tx_count'], reverse=True), 1):
                 f.write(f"\nWallet #{i}: {result['address']}\n")
                 f.write("-" * 100 + "\n")
+                
+                # Categories
+                if result.get('categories'):
+                    category_str = ", ".join([f"{cat} ({conf:.2f})" for cat, conf in result['categories']])
+                    f.write(f"Categories: {category_str}\n")
+                else:
+                    f.write(f"Categories: None detected\n")
+                f.write("\n")
+                
+                # ML Metrics
                 f.write(f"Trading Style Score (6D vector): {[f'{x:.4f}' for x in result['style_score']]}\n")
                 f.write(f"Risk Score: {result['risk_score']:.4f}\n")
                 f.write(f"Profitability Score: {result['profitability_score']:.4f}\n")
                 f.write(f"Bot Probability: {result['bot_probability']:.4f}\n")
                 f.write(f"Influence Score: {result['influence_score']:.4f}\n")
                 f.write(f"Sophistication Score: {result['sophistication_score']:.4f}\n")
+                f.write("\n")
+                
+                # Stats
                 f.write(f"Transaction Count: {int(result['tx_count'])}\n")
                 f.write(f"Age (days): {result['age_days']:.2f}\n")
                 f.write("\n")
@@ -762,7 +903,11 @@ class WalletProfiler:
         
         # Close log file
         if self.file_handle:
-            self.file_handle.close()
+            try:
+                self.file_handle.close()
+            except:
+                pass
+            self.file_handle = None
         
         print(f"\nProfiling complete. Log saved to: {self.log_file}")
 
