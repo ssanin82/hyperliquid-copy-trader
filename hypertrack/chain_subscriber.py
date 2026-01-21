@@ -53,6 +53,9 @@ class ChainSubscriber:
         self.subscription_id = None
         self.eoa_addresses = set()  # Store unique EOA addresses
         self.checked_addresses = {}  # Cache: address -> is_eoa (True/False/None if not checked)
+        self.erc20_token_addresses = set()  # Store unique ERC-20 token addresses
+        # ERC-20 Transfer event signature: keccak256("Transfer(address,address,uint256)")
+        self.ERC20_TRANSFER_EVENT_SIG = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
         
     def _log_transaction(self, tx_data: Dict[str, Any]):
         """Log a transaction to console and optionally to file."""
@@ -155,6 +158,10 @@ class ChainSubscriber:
         result = self._json_rpc_request("eth_blockNumber", [])
         return result
     
+    def _get_transaction_receipt(self, tx_hash: str) -> Optional[Dict[str, Any]]:
+        """Get transaction receipt which includes events/logs."""
+        return self._json_rpc_request("eth_getTransactionReceipt", [tx_hash])
+    
     def _process_block(self, block: Dict[str, Any]):
         """Process a block and log all transactions."""
         if not block:
@@ -192,19 +199,91 @@ class ChainSubscriber:
                     tx_to = tx_data.get("to")
             
             if tx_data:
+                tx_hash = tx_data.get("hash")
+                
                 # Check and collect EOA addresses
                 if tx_from:
                     self._check_and_collect_eoa(tx_from)
                 if tx_to:
                     self._check_and_collect_eoa(tx_to)
                 
+                # Fetch transaction receipt to get events/logs
+                events = []
+                receipt = None
+                if tx_hash:
+                    receipt = self._get_transaction_receipt(tx_hash)
+                    if receipt:
+                        # Extract events from logs
+                        logs = receipt.get("logs", [])
+                        for log in logs:
+                            log_topics = log.get("topics", [])
+                            log_address = log.get("address", "").lower()
+                            
+                            # Check if this is an ERC-20 Transfer event
+                            # Transfer event signature is the first topic
+                            if log_topics and len(log_topics) >= 3:
+                                event_sig = log_topics[0].lower() if isinstance(log_topics[0], str) else ""
+                                if event_sig == self.ERC20_TRANSFER_EVENT_SIG.lower():
+                                    # This is an ERC-20 Transfer event
+                                    # The contract address that emitted this event is the ERC-20 token
+                                    if log_address:
+                                        self.erc20_token_addresses.add(log_address)
+                                    
+                                    # Extract Transfer event parameters
+                                    from_addr = log_topics[1] if len(log_topics) > 1 else None
+                                    to_addr = log_topics[2] if len(log_topics) > 2 else None
+                                    # Value is in the data field (uint256)
+                                    value_data = log.get("data", "0x0")
+                                    
+                                    events.append({
+                                        "address": log_address,
+                                        "event_type": "ERC20_Transfer",
+                                        "topics": log_topics,
+                                        "data": value_data,
+                                        "from": from_addr,
+                                        "to": to_addr,
+                                        "value": value_data,
+                                        "logIndex": log.get("logIndex"),
+                                        "blockNumber": log.get("blockNumber"),
+                                        "blockHash": log.get("blockHash"),
+                                        "transactionHash": log.get("transactionHash"),
+                                        "transactionIndex": log.get("transactionIndex"),
+                                        "removed": log.get("removed", False)
+                                    })
+                                else:
+                                    # Other event
+                                    events.append({
+                                        "address": log_address,
+                                        "topics": log_topics,
+                                        "data": log.get("data"),
+                                        "logIndex": log.get("logIndex"),
+                                        "blockNumber": log.get("blockNumber"),
+                                        "blockHash": log.get("blockHash"),
+                                        "transactionHash": log.get("transactionHash"),
+                                        "transactionIndex": log.get("transactionIndex"),
+                                        "removed": log.get("removed", False)
+                                    })
+                            else:
+                                # Event without standard format
+                                events.append({
+                                    "address": log_address,
+                                    "topics": log_topics,
+                                    "data": log.get("data"),
+                                    "logIndex": log.get("logIndex"),
+                                    "blockNumber": log.get("blockNumber"),
+                                    "blockHash": log.get("blockHash"),
+                                    "transactionHash": log.get("transactionHash"),
+                                    "transactionIndex": log.get("transactionIndex"),
+                                    "removed": log.get("removed", False)
+                                })
+                
                 # Only log transactions (not blocks)
-                self._log_transaction({
+                transaction_log = {
                     "type": "transaction",
                     "block_number": block_number,
                     "block_hash": block_hash,
                     "transaction": {
-                        "hash": tx_data.get("hash"),
+                        "hash": tx_hash,
                         "from": tx_from,
                         "to": tx_to,
                         "value": tx_data.get("value"),
@@ -214,7 +293,24 @@ class ChainSubscriber:
                         "nonce": tx_data.get("nonce"),
                         "transactionIndex": tx_data.get("transactionIndex"),
                     }
-                })
+                }
+                
+                # Add receipt info if available
+                if receipt:
+                    transaction_log["receipt"] = {
+                        "status": receipt.get("status"),
+                        "gasUsed": receipt.get("gasUsed"),
+                        "cumulativeGasUsed": receipt.get("cumulativeGasUsed"),
+                        "contractAddress": receipt.get("contractAddress"),
+                        "logsBloom": receipt.get("logsBloom")
+                    }
+                
+                # Add events
+                if events:
+                    transaction_log["events"] = events
+                    transaction_log["event_count"] = len(events)
+                
+                self._log_transaction(transaction_log)
     
     def _on_ws_message(self, ws, message):
         """Handle WebSocket messages (for eth_subscribe)."""
@@ -440,6 +536,19 @@ class ChainSubscriber:
                 print(f"  {i}. {address}")
         else:
             print("No EOA addresses detected.")
+        print("=" * 80)
+        
+        # Display all collected ERC-20 token addresses
+        print("\n" + "=" * 80)
+        print("ERC-20 TOKEN ADDRESSES DETECTED")
+        print("=" * 80)
+        if self.erc20_token_addresses:
+            print(f"Total unique ERC-20 token addresses: {len(self.erc20_token_addresses)}")
+            print("\nERC-20 Token Addresses:")
+            for i, address in enumerate(sorted(self.erc20_token_addresses), 1):
+                print(f"  {i}. {address}")
+        else:
+            print("No ERC-20 token addresses detected.")
         print("=" * 80)
 
 
