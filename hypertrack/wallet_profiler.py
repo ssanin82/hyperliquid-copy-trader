@@ -30,6 +30,31 @@ import statistics
 import math
 
 
+NO_PUBLIC_API = False
+API_TOKENS = [
+    "HYPE",      # Hyperliquid native token
+    "BTC",       # Bitcoin
+    "ETH",       # Ethereum
+    "SOL",       # Solana
+    "AVAX",      # Avalanche
+    "OP",        # Optimism
+    "BNB",       # Binance Coin
+    "DOGE",      # Dogecoin
+    "LINK",      # Chainlink
+    "MATIC",     # Polygon
+    "LTC",       # Litecoin
+    "ARB",       # Arbitrum
+    "FTM",       # Fantom
+    "XRP",       # Ripple
+    "ETC",       # Ethereum Classic
+    "APE",       # ApeCoin
+    "PUMP",      # Pump token (high volume meme token) 
+    "PURR",      # Hypurr Fun / PURR
+    "KNTQ",      # Kinetiq
+    "SEDA"       # SEDA Protocol token
+]
+
+
 class WalletFeatures:
     """Tracks features for a single wallet."""
     
@@ -68,6 +93,16 @@ class WalletFeatures:
         # Network features
         self.interacted_addresses = set()
         self.contract_interactions = set()
+        
+        # Market data features (from Hyperliquid API)
+        self.trades_with_market_data = []  # List of (trade, market_state) tuples
+        self.market_impact_scores = []  # Market impact per trade
+        self.slippage_scores = []  # Slippage per trade
+        self.momentum_scores = []  # Momentum following score
+        self.mean_reversion_scores = []  # Mean reversion score
+        self.volatility_scores = []  # Volatility trading score
+        self.market_maker_scores = []  # Market making activity
+        self.order_book_participation = []  # Order book participation
         
     def add_transaction(self, tx_data: Dict[str, Any], timestamp: float):
         """Add a transaction to wallet history."""
@@ -219,6 +254,46 @@ class WalletFeatures:
         features['contract_interaction_count'] = len(self.contract_interactions)
         features['address_diversity'] = len(self.interacted_addresses)
         
+        # Market data features
+        if self.market_impact_scores:
+            features['avg_market_impact'] = statistics.mean(self.market_impact_scores)
+            features['max_market_impact'] = max(self.market_impact_scores)
+        else:
+            features['avg_market_impact'] = 0.0
+            features['max_market_impact'] = 0.0
+        
+        if self.slippage_scores:
+            features['avg_slippage'] = statistics.mean(self.slippage_scores)
+            features['slippage_std'] = statistics.stdev(self.slippage_scores) if len(self.slippage_scores) > 1 else 0.0
+        else:
+            features['avg_slippage'] = 0.0
+            features['slippage_std'] = 0.0
+        
+        if self.momentum_scores:
+            features['momentum_score'] = statistics.mean(self.momentum_scores)
+        else:
+            features['momentum_score'] = 0.0
+        
+        if self.mean_reversion_scores:
+            features['mean_reversion_score'] = statistics.mean(self.mean_reversion_scores)
+        else:
+            features['mean_reversion_score'] = 0.0
+        
+        if self.volatility_scores:
+            features['volatility_trading_score'] = statistics.mean(self.volatility_scores)
+        else:
+            features['volatility_trading_score'] = 0.0
+        
+        if self.market_maker_scores:
+            features['market_maker_score'] = statistics.mean(self.market_maker_scores)
+        else:
+            features['market_maker_score'] = 0.0
+        
+        if self.order_book_participation:
+            features['order_book_participation'] = statistics.mean(self.order_book_participation)
+        else:
+            features['order_book_participation'] = 0.0
+        
         return features
     
     def classify_wallet(self, features: Dict[str, float], bot_probability: float = 0.0) -> List[tuple]:
@@ -294,6 +369,54 @@ class WalletFeatures:
         if tx_count < 5 and age_days > 30:
             confidence = min(1.0, (30.0 / max(age_days, 1.0)) * ((5.0 - tx_count) / 5.0))
             categories.append(("Dormant", confidence))
+        
+        # New categories from market data
+        avg_market_impact = features.get('avg_market_impact', 1.0)
+        max_market_impact = features.get('max_market_impact', 1.0)
+        avg_slippage = features.get('avg_slippage', 0.0)
+        momentum_score = features.get('momentum_score', 0.0)
+        mean_reversion_score = features.get('mean_reversion_score', 0.0)
+        volatility_score = features.get('volatility_trading_score', 0.0)
+        market_maker_score = features.get('market_maker_score', 0.0)
+        order_book_participation = features.get('order_book_participation', 0.0)
+        
+        # Stealth Trader: Low impact, intentional stealth
+        if avg_market_impact < 0.1 and max_market_impact < 0.2 and tx_count > 10:
+            confidence = min(1.0, (0.1 - avg_market_impact) * 10)
+            categories.append(("Stealth Trader", confidence))
+        elif avg_market_impact < 0.2 and max_market_impact < 0.3:
+            categories.append(("Possible Stealth Trader", 0.6))
+        
+        # Smart Router: Large size with minimal impact
+        if avg_value > 10.0 and avg_market_impact < 0.15 and tx_count > 5:
+            confidence = min(1.0, (avg_value / 100.0) * (0.15 - avg_market_impact) * 10)
+            categories.append(("Smart Router", confidence))
+        elif avg_value > 5.0 and avg_market_impact < 0.2:
+            categories.append(("Possible Smart Router", 0.6))
+        
+        # Volatility Arbitrageur: Exploits volatility mispricings
+        if volatility_score > 0.7 and mean_reversion_score > 0.6 and tx_count > 10:
+            confidence = min(1.0, (volatility_score + mean_reversion_score) / 2)
+            categories.append(("Volatility Arbitrageur", confidence))
+        elif volatility_score > 0.6 and mean_reversion_score > 0.5:
+            categories.append(("Possible Volatility Arbitrageur", 0.6))
+        
+        # Hybrid Strategist: Adapts between momentum and mean reversion
+        momentum_strength = abs(momentum_score - 0.5)
+        mean_rev_strength = abs(mean_reversion_score - 0.5)
+        if momentum_strength < 0.3 and mean_rev_strength < 0.3 and tx_count > 15:
+            # Uses both strategies, adapts
+            confidence = min(1.0, 1.0 - (momentum_strength + mean_rev_strength))
+            categories.append(("Hybrid Strategist", confidence))
+        elif momentum_strength < 0.4 and mean_rev_strength < 0.4:
+            categories.append(("Possible Hybrid Strategist", 0.6))
+        
+        # Sophisticated Market Maker: Advanced market making with impact management
+        if market_maker_score > 0.7 and order_book_participation > 0.6 and avg_market_impact < 0.2:
+            confidence = min(1.0, (market_maker_score + order_book_participation) / 2 * (1.0 - avg_market_impact * 2))
+            categories.append(("Sophisticated Market Maker", confidence))
+        elif market_maker_score > 0.6 and order_book_participation > 0.5:
+            categories.append(("Possible Sophisticated Market Maker", 0.6))
         
         # Sort by confidence (highest first)
         categories.sort(key=lambda x: x[1], reverse=True)
@@ -399,6 +522,9 @@ class WalletProfiler:
     
     MAINNET_RPC_HTTP = "https://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
     MAINNET_RPC_WS = "wss://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
+    # Hyperliquid API WebSocket for market data
+    HYPERLIQUID_API_WS = "wss://api.hyperliquid.xyz/ws"
+    HYPERLIQUID_API_HTTP = "https://api.hyperliquid.xyz"
     
     def __init__(self, log_file: str = "wallet_profiling.log", model_file: str = "wallet_model.pt"):
         self.log_file = log_file
@@ -421,7 +547,10 @@ class WalletProfiler:
             'age_days', 'tx_per_day', 'burstiness', 'hour_entropy',
             'total_value', 'avg_value', 'max_value', 'value_std',
             'erc20_volume', 'token_diversity', 'long_ratio', 'flip_rate',
-            'size_entropy', 'contract_interaction_count', 'address_diversity'
+            'size_entropy', 'contract_interaction_count', 'address_diversity',
+            'avg_market_impact', 'max_market_impact', 'avg_slippage', 'slippage_std',
+            'momentum_score', 'mean_reversion_score', 'volatility_trading_score',
+            'market_maker_score', 'order_book_participation'
         ]
         
         # Training data
@@ -435,9 +564,32 @@ class WalletProfiler:
         self.feature_mean = None
         self.feature_std = None
         
-        # WebSocket
+        # WebSocket (blockchain RPC)
         self.ws = None
         self.ws_thread = None
+        
+        # Hyperliquid API WebSocket for market data
+        self.api_ws = None
+        self.api_ws_thread = None
+        
+        # Market data storage
+        self.market_data = {
+            'l2_book': {},  # coin -> latest order book
+            'bbo': {},  # coin -> best bid/offer
+            'candle': {},  # coin -> latest candle
+            'all_mids': {},  # coin -> mid price
+            'trades': []  # recent trades
+        }
+        self.market_data_lock = threading.Lock()
+        self.available_coins = []  # List of all available coins
+        self.coins_subscribed = set()  # Track which coins we've subscribed to
+        self.api_connection_count = 0  # Track number of API WebSocket connections
+        self.max_api_connections = 100  # Maximum allowed connections
+        self.total_subscriptions_made = 0  # Track total number of subscriptions
+        
+        # Statistics for final report
+        self.api_message_stats = {}  # {channel: {coin: count}} - messages per channel per token
+        self.wallets_in_trades = set()  # Wallets detected on-chain that were involved in API trades
     
     def _format_elapsed_time(self, elapsed_seconds: float) -> str:
         """Format elapsed time as 'X hours, Y minutes, Z seconds passed'."""
@@ -546,6 +698,8 @@ class WalletProfiler:
                 if tx_from not in self.wallets:
                     self.wallets[tx_from] = WalletFeatures(tx_from)
                 self.wallets[tx_from].add_transaction(tx, block_timestamp)
+                # Try to correlate with market data
+                self._correlate_trade_with_market_data(tx_from, tx, block_timestamp)
             else:
                 # Contract interaction
                 if tx_from in self.wallets:
@@ -558,6 +712,8 @@ class WalletProfiler:
                 if tx_to not in self.wallets:
                     self.wallets[tx_to] = WalletFeatures(tx_to)
                 self.wallets[tx_to].add_transaction(tx, block_timestamp)
+                # Try to correlate with market data
+                self._correlate_trade_with_market_data(tx_to, tx, block_timestamp)
             else:
                 # Contract interaction
                 if tx_from in self.wallets:
@@ -689,7 +845,7 @@ class WalletProfiler:
             self._start_websocket()
     
     def _start_websocket(self):
-        """Start WebSocket connection."""
+        """Start WebSocket connection for blockchain RPC."""
         try:
             self.ws = websocket.WebSocketApp(
                 self.MAINNET_RPC_WS,
@@ -704,6 +860,487 @@ class WalletProfiler:
             self.ws_thread.start()
         except Exception as e:
             self._log(f"Error starting WebSocket: {e}")
+    
+    def _on_api_ws_message(self, ws, message):
+        """Handle Hyperliquid API WebSocket messages."""
+        if NO_PUBLIC_API:
+            return
+        
+        try:
+            data = json.loads(message)
+            
+            with self.market_data_lock:
+                channel = data.get("channel", "unknown")
+                
+                # Handle l2Book updates
+                if channel == "l2Book":
+                    coin = data.get("data", {}).get("coin")
+                    if coin:
+                        # Update market data
+                        self.market_data['l2_book'][coin] = {
+                            'data': data.get("data"),
+                            'timestamp': time.time()
+                        }
+                        # Track statistics
+                        if channel not in self.api_message_stats:
+                            self.api_message_stats[channel] = {}
+                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+                
+                # Handle bbo updates
+                elif channel == "bbo":
+                    coin = data.get("data", {}).get("coin")
+                    if coin:
+                        self.market_data['bbo'][coin] = {
+                            'data': data.get("data"),
+                            'timestamp': time.time()
+                        }
+                        # Track statistics
+                        if channel not in self.api_message_stats:
+                            self.api_message_stats[channel] = {}
+                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+                
+                # Handle candle updates
+                elif channel == "candle":
+                    coin = data.get("data", {}).get("coin")
+                    if coin:
+                        self.market_data['candle'][coin] = {
+                            'data': data.get("data"),
+                            'timestamp': time.time()
+                        }
+                        # Track statistics
+                        if channel not in self.api_message_stats:
+                            self.api_message_stats[channel] = {}
+                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+                
+                # Handle allMids updates
+                elif channel == "allMids":
+                    mids = data.get("data", {})
+                    if mids:
+                        self.market_data['all_mids'] = {
+                            'data': mids,
+                            'timestamp': time.time()
+                        }
+                        # Track statistics (allMids doesn't have a specific coin, count as "all")
+                        if channel not in self.api_message_stats:
+                            self.api_message_stats[channel] = {}
+                        self.api_message_stats[channel]["all"] = self.api_message_stats[channel].get("all", 0) + 1
+                        
+                        # Extract available coins from allMids, but only subscribe to API_TOKENS
+                        if isinstance(mids, dict):
+                            # Filter to only coins in API_TOKENS
+                            available_mids = {k: v for k, v in mids.items() if k in API_TOKENS}
+                            new_coins = [coin for coin in available_mids.keys() if coin not in self.coins_subscribed]
+                            if new_coins:
+                                # Only track API_TOKENS, not all discovered coins
+                                self.available_coins = [coin for coin in API_TOKENS if coin in mids.keys()]
+                                self._log(f"Discovered {len(new_coins)} new coins from API_TOKENS, subscribing to all...")
+                                # Subscribe to all new coins at once
+                                self._subscribe_to_coins(new_coins)
+                
+                # Handle trades
+                elif channel == "trades":
+                    trades = data.get("data", [])
+                    # Trades can be an array or a single object with coin field
+                    if isinstance(trades, list):
+                        trade_list = trades
+                    elif isinstance(trades, dict) and "data" in trades:
+                        trade_list = trades.get("data", [])
+                    else:
+                        trade_list = [trades] if trades else []
+                    
+                    if trade_list:
+                        # Keep last 1000 trades
+                        self.market_data['trades'].extend(trade_list)
+                        if len(self.market_data['trades']) > 1000:
+                            self.market_data['trades'] = self.market_data['trades'][-1000:]
+                        
+                        # Track statistics per coin
+                        if channel not in self.api_message_stats:
+                            self.api_message_stats[channel] = {}
+                        
+                        # Count trades per coin
+                        for trade in trade_list:
+                            if isinstance(trade, dict):
+                                coin = trade.get("coin")
+                                if coin:
+                                    self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+                                else:
+                                    # Try to get coin from parent data structure
+                                    coin = data.get("coin")
+                                    if coin:
+                                        self.api_message_stats[channel][coin] = self.api_message_stats[channel].get(coin, 0) + 1
+                                    else:
+                                        self.api_message_stats[channel]["unknown"] = self.api_message_stats[channel].get("unknown", 0) + 1
+                            else:
+                                self.api_message_stats[channel]["unknown"] = self.api_message_stats[channel].get("unknown", 0) + 1
+                        
+                        # Check if any wallets we're tracking are involved in these trades
+                        for trade in trade_list:
+                            if isinstance(trade, dict):
+                                self._check_wallet_trade_involvement(trade)
+        
+        except Exception as e:
+            self._log(f"Error processing API message: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _on_api_ws_error(self, ws, error):
+        """Handle Hyperliquid API WebSocket errors."""
+        self._log(f"API WebSocket error: {error}")
+    
+    def _on_api_ws_close(self, ws, close_status_code, close_msg):
+        """Handle Hyperliquid API WebSocket close."""
+        if NO_PUBLIC_API:
+            return
+        
+        self._log(f"API WebSocket closed: {close_status_code} (total connections: {self.api_connection_count})")
+        
+        # Check if we've exceeded the maximum before reconnecting
+        if self.api_connection_count >= self.max_api_connections:
+            self._log(f"ERROR: Reached maximum API connections ({self.max_api_connections}). Not reconnecting.")
+            print(f"\n[ERROR] Reached maximum API connections ({self.max_api_connections}). Stopping profiler.")
+            self.running = False
+            return
+        
+        if self.running and not NO_PUBLIC_API:
+            time.sleep(2)
+            self._start_api_websocket()
+    
+    def _get_available_coins(self) -> List[str]:
+        """Get list of coins to subscribe to (only API_TOKENS)."""
+        # Only subscribe to tokens in API_TOKENS list
+        return [token for token in API_TOKENS]
+    
+    def _is_ws_connected(self) -> bool:
+        """Check if WebSocket is still connected."""
+        if not self.api_ws:
+            return False
+        try:
+            if hasattr(self.api_ws, 'sock') and self.api_ws.sock:
+                return self.api_ws.sock.connected
+        except:
+            pass
+        return False
+    
+    def _subscribe_to_coins(self, coins: List[str]):
+        """Subscribe to market data streams for given coins."""
+        if not self.api_ws or not self._is_ws_connected():
+            self._log("WebSocket not connected, skipping subscription")
+            return
+        
+        subscriptions = []
+        new_coins_list = []
+        for coin in coins:
+            if coin in self.coins_subscribed:
+                continue
+            
+            subscriptions.extend([
+                {"method": "subscribe", "subscription": {"type": "l2Book", "coin": coin}},
+                {"method": "subscribe", "subscription": {"type": "bbo", "coin": coin}},
+                {"method": "subscribe", "subscription": {"type": "candle", "coin": coin, "interval": "1m"}},
+                {"method": "subscribe", "subscription": {"type": "trades", "coin": coin}},
+            ])
+            new_coins_list.append(coin)
+            self.coins_subscribed.add(coin)
+        
+        if not subscriptions:
+            return
+        
+        # Subscribe to all at once without delays
+        successful = 0
+        failed = 0
+        
+        self._log(f"Subscribing to {len(new_coins_list)} coins ({len(subscriptions)} total subscriptions)...")
+        
+        for sub in subscriptions:
+            # Extract subscription details for logging
+            subscription_info = sub.get("subscription", {})
+            coin = subscription_info.get("coin", "unknown")
+            sub_type = subscription_info.get("type", "unknown")
+            
+            try:
+                # Send subscription immediately
+                self.api_ws.send(json.dumps(sub))
+                successful += 1
+                
+            except (OSError, ConnectionError, AttributeError, ConnectionAbortedError) as e:
+                failed += 1
+                # Connection error - log and continue
+                error_str = str(e).lower()
+                if any(keyword in error_str for keyword in ["closed", "bad_length", "10054", "aborted", "reset"]):
+                    self._log(f"Connection error during subscription: {type(e).__name__}")
+                    self._log(f"Failed subscription details: coin='{coin}', type='{sub_type}', subscription={sub}")
+                    print(f"\n[ERROR] Connection error while subscribing to: coin='{coin}', type='{sub_type}'")
+                    print(f"[ERROR] Full subscription: {json.dumps(sub, indent=2)}")
+                else:
+                    self._log(f"Error subscribing to coin='{coin}', type='{sub_type}': {type(e).__name__}")
+            except Exception as e:
+                failed += 1
+                self._log(f"Error subscribing to coin='{coin}', type='{sub_type}': {type(e).__name__}")
+        
+        self.total_subscriptions_made += successful
+        self._log(f"Subscribed to {len(new_coins_list)} coins: {successful} subscriptions successful, {failed} failed")
+        self._log(f"Total subscriptions made so far: {self.total_subscriptions_made}")
+        self._log(f"Subscriptions: {successful} successful, {failed} failed | Total: {self.total_subscriptions_made}")
+        
+        # Verify connection is still alive after subscriptions
+        if not self._is_ws_connected():
+            self._log("WARNING: Connection lost after sending subscriptions")
+        else:
+            self._log("Connection verified: still connected after subscriptions")
+    
+    def _on_api_ws_open(self, ws):
+        """Handle Hyperliquid API WebSocket open."""
+        if NO_PUBLIC_API:
+            self._log("Public API subscriptions disabled, closing connection")
+            ws.close()
+            return
+        
+        self.api_connection_count += 1
+        self._log(f"Hyperliquid API WebSocket connected (connection #{self.api_connection_count})")
+        
+        # Check if we've exceeded the maximum connections
+        if self.api_connection_count > self.max_api_connections:
+            self._log(f"ERROR: Exceeded maximum API connections ({self.max_api_connections}). Aborting.")
+            print(f"\n[ERROR] Exceeded maximum API connections ({self.max_api_connections}). Stopping profiler.")
+            self.running = False
+            if self.api_ws:
+                self.api_ws.close()
+            return
+        
+        # First, subscribe to allMids to get all available coins
+        try:
+            subscribe_allmids = {"method": "subscribe", "subscription": {"type": "allMids"}}
+            ws.send(json.dumps(subscribe_allmids))
+            self._log("Subscribed to allMids to discover available coins")
+        except Exception as e:
+            self._log(f"Error subscribing to allMids: {e}")
+        
+        # Get coins from API_TOKENS list
+        coins = self._get_available_coins()
+        if coins:
+            self.available_coins = coins
+            self._log(f"Subscribing to all {len(coins)} tokens from API_TOKENS list...")
+            # Subscribe to all coins at once
+            self._subscribe_to_coins(coins)
+        else:
+            self._log("No tokens in API_TOKENS list to subscribe to")
+    
+    def _start_api_websocket(self):
+        """Start Hyperliquid API WebSocket connection."""
+        if NO_PUBLIC_API:
+            return
+        
+        try:
+            self.api_ws = websocket.WebSocketApp(
+                self.HYPERLIQUID_API_WS,
+                on_message=self._on_api_ws_message,
+                on_error=self._on_api_ws_error,
+                on_close=self._on_api_ws_close,
+                on_open=self._on_api_ws_open
+            )
+            def run_api_ws():
+                self._log("API WebSocket thread started")
+                self.api_ws.run_forever()
+                self._log("API WebSocket thread ended")
+            self.api_ws_thread = threading.Thread(target=run_api_ws, daemon=True)
+            self.api_ws_thread.start()
+            self._log("API WebSocket thread created")
+        except Exception as e:
+            self._log(f"Error starting API WebSocket: {e}")
+    
+    def _calculate_market_metrics(self, wallet_addr: str, trade_data: Dict[str, Any], timestamp: float):
+        """Calculate market metrics for a trade and update wallet features."""
+        coin = trade_data.get("coin", "").upper()
+        if not coin:
+            return
+        
+        wallet = self.wallets.get(wallet_addr.lower())
+        if not wallet:
+            return
+        
+        with self.market_data_lock:
+            # Get market state at trade time
+            bbo = self.market_data['bbo'].get(coin, {}).get('data', {})
+            l2_book = self.market_data['l2_book'].get(coin, {}).get('data', {})
+            candle = self.market_data['candle'].get(coin, {}).get('data', {})
+            all_mids = self.market_data['all_mids'].get('data', {})
+            
+            mid_price = None
+            if coin in all_mids:
+                mid_price = all_mids[coin]
+            elif bbo:
+                bid = float(bbo.get('bid', {}).get('px', 0))
+                ask = float(bbo.get('ask', {}).get('px', 0))
+                if bid > 0 and ask > 0:
+                    mid_price = (bid + ask) / 2
+            
+            if not mid_price or mid_price == 0:
+                return
+            
+            # Get trade price and size
+            trade_price = float(trade_data.get("px", 0))
+            trade_size = float(trade_data.get("sz", 0))
+            side = trade_data.get("side", "").upper()
+            
+            if trade_price == 0 or trade_size == 0:
+                return
+            
+            # Calculate slippage (deviation from mid price)
+            if side in ['B', 'BUY', 'LONG']:
+                slippage = (trade_price - mid_price) / mid_price if mid_price > 0 else 0
+            else:
+                slippage = (mid_price - trade_price) / mid_price if mid_price > 0 else 0
+            
+            wallet.slippage_scores.append(abs(slippage))
+            
+            # Calculate market impact (trade size vs available liquidity)
+            market_impact = 0.0
+            if l2_book and 'levels' in l2_book:
+                # Estimate available liquidity
+                available_liquidity = 0.0
+                levels = l2_book.get('levels', [])
+                for level in levels[:5]:  # Top 5 levels
+                    if side in ['B', 'BUY', 'LONG']:
+                        # Buying, look at asks
+                        available_liquidity += float(level.get('askSz', 0))
+                    else:
+                        # Selling, look at bids
+                        available_liquidity += float(level.get('bidSz', 0))
+                
+                if available_liquidity > 0:
+                    market_impact = min(1.0, trade_size / available_liquidity)
+            
+            wallet.market_impact_scores.append(market_impact)
+            
+            # Calculate momentum score (price movement direction)
+            momentum_score = 0.0
+            if candle and 'open' in candle and 'close' in candle:
+                open_price = float(candle.get('open', 0))
+                close_price = float(candle.get('close', 0))
+                if open_price > 0:
+                    price_change = (close_price - open_price) / open_price
+                    # Positive if trading with trend
+                    if (side in ['B', 'BUY', 'LONG'] and price_change > 0) or \
+                       (side in ['S', 'SELL', 'SHORT'] and price_change < 0):
+                        momentum_score = min(1.0, abs(price_change) * 10)
+                    else:
+                        momentum_score = 0.0
+            
+            wallet.momentum_scores.append(momentum_score)
+            
+            # Calculate mean reversion score (opposite of momentum)
+            mean_reversion_score = 0.0
+            if candle and 'open' in candle and 'close' in candle:
+                open_price = float(candle.get('open', 0))
+                close_price = float(candle.get('close', 0))
+                if open_price > 0:
+                    price_change = (close_price - open_price) / open_price
+                    # Positive if trading against trend
+                    if (side in ['B', 'BUY', 'LONG'] and price_change < 0) or \
+                       (side in ['S', 'SELL', 'SHORT'] and price_change > 0):
+                        mean_reversion_score = min(1.0, abs(price_change) * 10)
+                    else:
+                        mean_reversion_score = 0.0
+            
+            wallet.mean_reversion_scores.append(mean_reversion_score)
+            
+            # Calculate volatility score
+            volatility_score = 0.0
+            if candle and 'high' in candle and 'low' in candle:
+                high = float(candle.get('high', 0))
+                low = float(candle.get('low', 0))
+                if mid_price > 0:
+                    volatility = (high - low) / mid_price
+                    volatility_score = min(1.0, volatility * 10)
+            
+            wallet.volatility_scores.append(volatility_score)
+            
+            # Calculate market maker score (order book participation)
+            market_maker_score = 0.0
+            order_book_participation = 0.0
+            if bbo:
+                spread = 0.0
+                bid_px = float(bbo.get('bid', {}).get('px', 0))
+                ask_px = float(bbo.get('ask', {}).get('px', 0))
+                if bid_px > 0 and ask_px > 0:
+                    spread = (ask_px - bid_px) / mid_price if mid_price > 0 else 0
+                    # Market makers have tight spreads and consistent presence
+                    if spread < 0.001:  # Very tight spread
+                        market_maker_score = 1.0 - (spread * 1000)
+                    else:
+                        market_maker_score = max(0.0, 1.0 - (spread * 100))
+            
+            # Order book participation (simplified - would need more data)
+            if l2_book:
+                order_book_participation = 0.5  # Placeholder - would need actual order placement data
+            
+            wallet.market_maker_scores.append(market_maker_score)
+            wallet.order_book_participation.append(order_book_participation)
+            
+            # Store trade with market data
+            wallet.trades_with_market_data.append({
+                'trade': trade_data,
+                'market_state': {
+                    'mid_price': mid_price,
+                    'slippage': slippage,
+                    'market_impact': market_impact,
+                    'momentum': momentum_score,
+                    'mean_reversion': mean_reversion_score,
+                    'volatility': volatility_score
+                },
+                'timestamp': timestamp
+            })
+    
+    def _check_wallet_trade_involvement(self, trade: Dict[str, Any]):
+        """Check if any tracked wallet is involved in this trade."""
+        # This is a simplified check - in reality, you'd need to match by address or other identifiers
+        # For now, we'll check if the trade timestamp matches any recent wallet activity
+        trade_time = trade.get('time', 0)
+        if isinstance(trade_time, (int, float)):
+            # Convert ms to seconds if needed
+            if trade_time > 1e12:  # Likely in milliseconds
+                trade_time = trade_time / 1000.0
+        else:
+            return
+        
+        current_time = time.time()
+        
+        # Check if any wallet had activity around this trade time (within 5 seconds)
+        for wallet_addr, wallet in self.wallets.items():
+            if wallet.transaction_times:
+                # Check if wallet had activity near trade time
+                for tx_time in wallet.transaction_times[-10:]:  # Check last 10 transactions
+                    if abs(tx_time - trade_time) < 5.0:  # Within 5 seconds
+                        self.wallets_in_trades.add(wallet_addr)
+                        break
+    
+    def _correlate_trade_with_market_data(self, wallet_addr: str, tx_data: Dict[str, Any], timestamp: float):
+        """Correlate an on-chain transaction with market data if it's a trade."""
+        # Check if this transaction might be a trade
+        # Look for ERC-20 transfers or other indicators
+        # For now, we'll check market data trades stream for matching trades
+        
+        with self.market_data_lock:
+            # Check recent trades for potential matches
+            recent_trades = self.market_data['trades'][-100:]  # Last 100 trades
+            
+            # Try to match by timestamp proximity (within 5 seconds)
+            for trade in recent_trades:
+                trade_time = trade.get('time', 0)
+                if isinstance(trade_time, (int, float)):
+                    # Convert ms to seconds if needed
+                    if trade_time > 1e12:  # Likely in milliseconds
+                        trade_time = trade_time / 1000.0
+                else:
+                    continue
+                
+                if abs(trade_time - timestamp) < 5.0:  # Within 5 seconds
+                    # Potential match - mark wallet as involved in trade
+                    self.wallets_in_trades.add(wallet_addr)
+                    # Calculate metrics
+                    self._calculate_market_metrics(wallet_addr, trade, timestamp)
+                    break
     
     def _train_model(self):
         """Train the MTL model on collected wallet features."""
@@ -854,7 +1491,36 @@ class WalletProfiler:
                 elapsed = time.time() - self.rpc_start_time
                 f.write(f"Total time: {elapsed:.2f} seconds ({elapsed/60:.2f} minutes)\n")
                 f.write(f"RPC calls per second: {self.rpc_call_count/elapsed:.2f}\n")
-            f.write("=" * 100 + "\n\n")
+            
+            # API Statistics
+            f.write("\n" + "=" * 100 + "\n")
+            f.write("PUBLIC API STATISTICS\n")
+            f.write("=" * 100 + "\n")
+            f.write(f"Total API connections: {self.api_connection_count}\n")
+            f.write(f"Total subscriptions made: {self.total_subscriptions_made}\n")
+            f.write(f"Wallets involved in API trades: {len(self.wallets_in_trades)}\n")
+            if self.wallets_in_trades:
+                f.write(f"Wallet addresses involved in trades: {', '.join(list(self.wallets_in_trades)[:10])}")
+                if len(self.wallets_in_trades) > 10:
+                    f.write(f" ... and {len(self.wallets_in_trades) - 10} more\n")
+                else:
+                    f.write("\n")
+            f.write("\n")
+            
+            # Messages per channel per token
+            if self.api_message_stats:
+                f.write("Messages received per channel per token:\n")
+                f.write("-" * 100 + "\n")
+                for channel, coin_counts in sorted(self.api_message_stats.items()):
+                    f.write(f"\nChannel: {channel}\n")
+                    total_channel = sum(coin_counts.values())
+                    f.write(f"  Total messages: {total_channel}\n")
+                    for coin, count in sorted(coin_counts.items(), key=lambda x: x[1], reverse=True):
+                        f.write(f"  {coin}: {count} messages\n")
+            else:
+                f.write("No API messages received (NO_PUBLIC_API may be enabled)\n")
+            
+            f.write("\n" + "=" * 100 + "\n\n")
             
             for i, result in enumerate(sorted(wallet_results, key=lambda x: x['tx_count'], reverse=True), 1):
                 f.write(f"\nWallet #{i}: {result['address']}\n")
@@ -900,6 +1566,12 @@ class WalletProfiler:
         
         self._start_websocket()
         
+        # Start Hyperliquid API WebSocket for market data (if enabled)
+        if not NO_PUBLIC_API:
+            self._start_api_websocket()
+        else:
+            self._log("Public API subscriptions disabled (NO_PUBLIC_API=True)")
+        
         last_training = time.time()
         
         try:
@@ -924,6 +1596,9 @@ class WalletProfiler:
         if self.ws:
             self.ws.close()
         
+        if self.api_ws:
+            self.api_ws.close()
+        
         # Final training
         if len(self.wallets) > 0:
             self._train_model()
@@ -946,6 +1621,12 @@ class WalletProfiler:
         else:
             self._log("Cannot generate report - no model available")
         
+        # Log final connection and subscription counts
+        self._log(f"Total Hyperliquid API connections made: {self.api_connection_count}")
+        self._log(f"Total subscriptions made: {self.total_subscriptions_made}")
+        if self.api_connection_count >= self.max_api_connections:
+            self._log(f"WARNING: Reached maximum API connections limit ({self.max_api_connections})")
+        
         # Close log file
         if self.file_handle:
             try:
@@ -955,6 +1636,8 @@ class WalletProfiler:
             self.file_handle = None
         
         print(f"\nProfiling complete. Log saved to: {self.log_file}")
+        print(f"Total Hyperliquid API connections: {self.api_connection_count}")
+        print(f"Total subscriptions made: {self.total_subscriptions_made}")
 
 
 def main():
