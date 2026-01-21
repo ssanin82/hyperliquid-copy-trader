@@ -12,7 +12,7 @@ WATCH_COINS = ["BTC", "ETH", "SOL", "ARB", "AVAX"]
 BOT_SCORE = 0.8
 
 # Number of trades to record before stopping
-TRADE_SAMPLE_SIZE = 10000
+TRADE_SAMPLE_SIZE = 100000
 
 # Token to record trades for
 TOKEN = "ETH"

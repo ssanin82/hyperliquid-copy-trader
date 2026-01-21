@@ -59,6 +59,7 @@ Repository = "https://github.com/yourusername/hypertrack"
 [project.scripts]
 hypertrack = "hypertrack.recorder:main"
 hypertrack-metrics = "hypertrack.metrics_tracker:main"
+hypertrack-chain = "hypertrack.chain_test:main"
 
 [tool.setuptools]
 packages = ["hypertrack"]
