@@ -17,8 +17,7 @@ import time
 import signal
 import sys
 from datetime import datetime, UTC
-from typing import Dict, Any, Optional, List, Set
-from collections import defaultdict, deque
+from typing import Dict, Any, Optional, List
 import requests
 import websocket
 import threading
@@ -29,8 +28,6 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import statistics
 import math
-
-from hypertrack.constants import TOKEN
 
 
 class WalletFeatures:
@@ -416,6 +413,9 @@ class WalletProfiler:
         # Model
         self.model = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Strategy start time for periodic logging
+        self.strategy_start_time = None
+        self.status_log_thread = None
         self.feature_names = [
             'tx_count', 'erc20_count', 'unique_tokens', 'unique_addresses',
             'age_days', 'tx_per_day', 'burstiness', 'hour_entropy',
@@ -438,6 +438,45 @@ class WalletProfiler:
         # WebSocket
         self.ws = None
         self.ws_thread = None
+    
+    def _format_elapsed_time(self, elapsed_seconds: float) -> str:
+        """Format elapsed time as 'X hours, Y minutes, Z seconds passed'."""
+        hours = int(elapsed_seconds // 3600)
+        minutes = int((elapsed_seconds % 3600) // 60)
+        seconds = int(elapsed_seconds % 60)
+        
+        parts = []
+        if hours > 0:
+            parts.append(f"{hours} hour{'s' if hours != 1 else ''}")
+        if minutes > 0:
+            parts.append(f"{minutes} minute{'s' if minutes != 1 else ''}")
+        if seconds > 0 or len(parts) == 0:
+            parts.append(f"{seconds} second{'s' if seconds != 1 else ''}")
+        
+        return ", ".join(parts) + " passed"
+    
+    def _periodic_status_log(self):
+        """Log elapsed time every minute."""
+        while self.running:
+            time.sleep(60)  # Wait 60 seconds
+            if self.running and self.strategy_start_time:
+                elapsed = time.time() - self.strategy_start_time
+                elapsed_str = self._format_elapsed_time(elapsed)
+                wallet_count = len(self.wallets)
+                print(f"\n[{datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC] {elapsed_str} | Wallets detected: {wallet_count}")
+                if self.file_handle:
+                    try:
+                        status_log = {
+                            "type": "status",
+                            "timestamp": datetime.now(UTC).isoformat().replace('+00:00', 'Z'),
+                            "elapsed_time": elapsed,
+                            "elapsed_time_formatted": elapsed_str,
+                            "wallet_count": wallet_count
+                        }
+                        self.file_handle.write(json.dumps(status_log, separators=(',', ':')) + "\n")
+                        self.file_handle.flush()
+                    except (ValueError, OSError):
+                        pass
         
     def _log(self, message: str, data: Optional[Dict] = None):
         """Log message and data."""
@@ -853,6 +892,12 @@ class WalletProfiler:
         self._log("Wallet profiler started")
         
         self.running = True
+        self.strategy_start_time = time.time()
+        
+        # Start periodic status logging (every minute)
+        self.status_log_thread = threading.Thread(target=self._periodic_status_log, daemon=True)
+        self.status_log_thread.start()
+        
         self._start_websocket()
         
         last_training = time.time()

@@ -1,9 +1,13 @@
 """
 TradeRecorder - Records trades for a specific token until sample size is reached.
 
-Records all trade information for the specified token (defaults to TOKEN from constants)
+Records all trade information for the specified token (defaults to TOKEN)
 and stops when TRADE_SAMPLE_SIZE is reached.
 """
+
+# Constants
+TOKEN = "ETH"
+TRADE_SAMPLE_SIZE = 100000
 
 import json
 import time
@@ -13,8 +17,6 @@ from datetime import datetime, UTC
 from typing import Optional, Dict, Any
 import websocket
 import threading
-
-from hypertrack.constants import TRADE_SAMPLE_SIZE, TOKEN
 
 
 class TradeRecorder:
@@ -28,7 +30,7 @@ class TradeRecorder:
         Initialize the trade recorder.
         
         Args:
-            token: Token to record trades for (defaults to TOKEN from constants)
+            token: Token to record trades for (defaults to TOKEN)
             output_file: File to write trades to
             testnet: Use testnet endpoints
         """

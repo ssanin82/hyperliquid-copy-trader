@@ -64,7 +64,6 @@ setup(
     entry_points={
         "console_scripts": [
             "hypertrack=hypertrack.recorder:main",
-            "hypertrack-metrics=hypertrack.metrics_tracker:main",
             "hypertrack-chain=hypertrack.chain_subscriber:main",
             "hypertrack-profile=hypertrack.wallet_profiler:main",
         ],
