@@ -27,7 +27,7 @@ L2BOOK_FILE = os.path.join(DATA_DIR, "l2book.jsonl")
 CANDLES_FILE = os.path.join(DATA_DIR, "candles.jsonl")
 MODEL_FILE = "wallet_model.pt"
 FINAL_REPORT_FILE = "final_report.txt"
-TX_COUNT_THRESHOLD = 5
+TX_COUNT_THRESHOLD = 1
 SHOW_NO_CATEGORIES = False
 
 # ERC-20 Transfer event signature
@@ -419,11 +419,17 @@ class WalletFeatures:
             categories.append(("Possible HODLer", 0.6))
         
         # Whale: Large transaction values
-        if max_value > 100.0 or total_value > 1000.0:
-            confidence = min(1.0, (max_value / 1000.0) if max_value > 0 else (total_value / 10000.0))
-            categories.append(("Whale", min(1.0, confidence)))
-        elif max_value > 10.0 or total_value > 100.0:
-            categories.append(("Possible Whale", 0.6))
+        # Require both high single transaction AND high total volume to be a true whale
+        # Also require minimum transaction count to avoid one-off large transactions
+        if tx_count >= 5:
+            if (max_value > 50000.0 and total_value > 100000.0) or total_value > 500000.0:
+                # True whale: very large single transactions AND high total volume, OR extremely high total volume
+                confidence = min(1.0, (max_value / 500000.0) * 0.5 + (total_value / 5000000.0) * 0.5)
+                categories.append(("Whale", min(1.0, confidence)))
+            elif (max_value > 10000.0 and total_value > 50000.0) or total_value > 200000.0:
+                # Possible whale: large transactions and significant total volume, OR very high total volume
+                confidence = min(0.85, (max_value / 100000.0) * 0.4 + (total_value / 1000000.0) * 0.4)
+                categories.append(("Possible Whale", confidence))
         
         # Token Collector: High ERC-20 activity, many tokens
         if unique_tokens > 10 and erc20_count > tx_count * 2:
