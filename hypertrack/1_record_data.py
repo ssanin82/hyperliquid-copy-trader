@@ -25,15 +25,15 @@ HYPERLIQUID_API_WS = "wss://api.hyperliquid.xyz/ws"
 
 API_TOKENS = [
     "ETH",       # Ethereum
-    # "HYPE",      # Hyperliquid native token
-    # "BTC",       # Bitcoin
-    # "SOL",       # Solana
-    # "AVAX",      # Avalanche
-    # "OP",        # Optimism
-    # "BNB",       # Binance Coin
-    # "DOGE",      # Dogecoin
-    # "LINK",      # Chainlink
-    # "MATIC",     # Polygon
+    "HYPE",      # Hyperliquid native token
+    "BTC",       # Bitcoin
+    "SOL",       # Solana
+    "AVAX",      # Avalanche
+    "OP",        # Optimism
+    "BNB",       # Binance Coin
+    "DOGE",      # Dogecoin
+    "LINK",      # Chainlink
+    "MATIC",     # Polygon
     # "LTC",       # Litecoin
     # "ARB",       # Arbitrum
     # "FTM",       # Fantom
@@ -46,6 +46,16 @@ API_TOKENS = [
     # "SEDA"       # SEDA Protocol token
 ]
 
+RECORD_BLOCKS = True
+RECORD_TRANSACTIONS = True
+RECORD_TRADES = True
+RECORD_BBO = True
+RECORD_L2BOOK = True
+RECORD_CANDLES = False
+
+# Candle interval
+CANDLE_INTERVAL = "1m"  # Supported: "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M"
+
 # Output directory for recorded data
 DATA_DIR = "recorded_data"
 BLOCKS_FILE = os.path.join(DATA_DIR, "blocks.jsonl")
@@ -53,6 +63,7 @@ TRANSACTIONS_FILE = os.path.join(DATA_DIR, "transactions.jsonl")
 TRADES_FILE = os.path.join(DATA_DIR, "trades.jsonl")
 BBO_FILE = os.path.join(DATA_DIR, "bbo.jsonl")
 L2BOOK_FILE = os.path.join(DATA_DIR, "l2book.jsonl")
+CANDLES_FILE = os.path.join(DATA_DIR, "candles.jsonl")
 METRICS_FILE = os.path.join(DATA_DIR, "data_collection_report.txt")
 
 
@@ -299,6 +310,148 @@ def api_subscription_worker(stop_event: Event, output_queue: MPQueue, channel: s
         pass
 
 
+def candle_subscription_worker(stop_event: Event, output_queue: MPQueue, coins: List[str], interval: str):
+    """Worker process for Hyperliquid candle subscription."""
+    try:
+        import websocket
+        
+        reconnect_delay = 2
+        max_reconnect_delay = 60
+        
+        def on_message(ws, message):
+            """Handle WebSocket messages."""
+            if stop_event.is_set():
+                ws.close()
+                return
+            
+            try:
+                data = json.loads(message)
+                message_channel = data.get("channel", "")
+                
+                # Handle subscription response
+                if message_channel == "subscriptionResponse":
+                    return
+                
+                # Handle candle messages
+                if message_channel == "candle" and "data" in data:
+                    candle_data = data["data"]
+                    
+                    # Candle data can be a list or dict
+                    # Candle data uses "s" field for symbol/coin
+                    candles_to_send = []
+                    
+                    if isinstance(candle_data, list):
+                        for candle in candle_data:
+                            if isinstance(candle, dict):
+                                # Check both "s" (symbol) and "coin" fields
+                                candle_coin = candle.get("s", candle.get("coin", ""))
+                                if candle_coin in coins:
+                                    candles_to_send.append(candle)
+                    elif isinstance(candle_data, dict):
+                        # Check both "s" (symbol) and "coin" fields
+                        candle_coin = candle_data.get("s", candle_data.get("coin", ""))
+                        if candle_coin in coins:
+                            candles_to_send.append(candle_data)
+                    
+                    # Send each candle to main process
+                    for candle in candles_to_send:
+                        output_queue.put({
+                            "type": "api_data",
+                            "channel": "candle",
+                            "data": {"channel": "candle", "data": candle}
+                        })
+            except Exception as e:
+                if not stop_event.is_set():
+                    output_queue.put({
+                        "type": "error",
+                        "source": "candle",
+                        "error": str(e)
+                    })
+        
+        def on_open(ws):
+            """Handle WebSocket open."""
+            nonlocal reconnect_delay
+            reconnect_delay = 2
+            
+            try:
+                for coin in coins:
+                    subscribe_msg = {
+                        "method": "subscribe",
+                        "subscription": {"type": "candle", "coin": coin, "interval": interval}
+                    }
+                    try:
+                        ws.send(json.dumps(subscribe_msg))
+                        if not stop_event.is_set():
+                            output_queue.put({
+                                "type": "subscription_made",
+                                "source": "candle",
+                                "coin": coin
+                            })
+                        time.sleep(0.1)
+                    except Exception as e:
+                        if not stop_event.is_set():
+                            output_queue.put({
+                                "type": "error",
+                                "source": "candle",
+                                "error": f"Error sending subscription for {coin}: {str(e)}"
+                            })
+            except Exception as e:
+                if not stop_event.is_set():
+                    output_queue.put({
+                        "type": "error",
+                        "source": "candle",
+                        "error": f"Error during subscription: {str(e)}"
+                    })
+        
+        def on_error(ws, error):
+            """Handle WebSocket error."""
+            if not stop_event.is_set():
+                output_queue.put({
+                    "type": "error",
+                    "source": "candle",
+                    "error": str(error)
+                })
+        
+        def on_close(ws, close_status_code, close_msg):
+            """Handle WebSocket close."""
+            pass
+        
+        # Main loop with reconnection
+        while not stop_event.is_set():
+            try:
+                ws_instance = websocket.WebSocketApp(
+                    HYPERLIQUID_API_WS,
+                    on_message=on_message,
+                    on_error=on_error,
+                    on_close=on_close,
+                    on_open=on_open
+                )
+                ws_instance.run_forever(ping_interval=30, ping_timeout=10)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                if not stop_event.is_set():
+                    output_queue.put({
+                        "type": "error",
+                        "source": "candle",
+                        "error": str(e)
+                    })
+            
+            # Reconnect with exponential backoff
+            if not stop_event.is_set():
+                sleep_chunk = 0.5
+                slept = 0.0
+                while slept < reconnect_delay and not stop_event.is_set():
+                    try:
+                        time.sleep(min(sleep_chunk, reconnect_delay - slept))
+                        slept += sleep_chunk
+                    except KeyboardInterrupt:
+                        break
+                reconnect_delay = min(reconnect_delay * 2, max_reconnect_delay)
+    except KeyboardInterrupt:
+        pass
+
+
 class DataRecorder:
     """Records blockchain and API data to files."""
     
@@ -312,12 +465,23 @@ class DataRecorder:
         # Create data directory
         os.makedirs(data_dir, exist_ok=True)
         
-        # Open output files
-        self.blocks_file = open(BLOCKS_FILE, 'w')
-        self.transactions_file = open(TRANSACTIONS_FILE, 'w')
-        self.trades_file = open(TRADES_FILE, 'w')
-        self.bbo_file = open(BBO_FILE, 'w')
-        self.l2book_file = open(L2BOOK_FILE, 'w')
+        # Clear existing files in the data directory
+        if os.path.exists(data_dir):
+            for filename in os.listdir(data_dir):
+                file_path = os.path.join(data_dir, filename)
+                try:
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                except Exception as e:
+                    print(f"Warning: Could not delete {file_path}: {e}")
+        
+        # Open output files conditionally
+        self.blocks_file = open(BLOCKS_FILE, 'w') if RECORD_BLOCKS else None
+        self.transactions_file = open(TRANSACTIONS_FILE, 'w') if RECORD_TRANSACTIONS else None
+        self.trades_file = open(TRADES_FILE, 'w') if RECORD_TRADES else None
+        self.bbo_file = open(BBO_FILE, 'w') if RECORD_BBO else None
+        self.l2book_file = open(L2BOOK_FILE, 'w') if RECORD_L2BOOK else None
+        self.candles_file = open(CANDLES_FILE, 'w') if RECORD_CANDLES else None
         
         # Metrics
         self.metrics = {
@@ -326,6 +490,7 @@ class DataRecorder:
             'trades_received': 0,
             'bbo_received': 0,
             'l2book_received': 0,
+            'candles_received': 0,
             'start_time': None,  # ISO string
             'start_timestamp': None,  # Unix timestamp for calculations
             'end_time': None,
@@ -333,11 +498,12 @@ class DataRecorder:
             'last_block_number': None  # Last recorded block number
         }
         
-        # Queues
-        self.blockchain_queue = MPQueue()
-        self.trades_queue = MPQueue()
-        self.bbo_queue = MPQueue()
-        self.l2book_queue = MPQueue()
+        # Queues (only create if needed)
+        self.blockchain_queue = MPQueue() if RECORD_BLOCKS or RECORD_TRANSACTIONS else None
+        self.trades_queue = MPQueue() if RECORD_TRADES else None
+        self.bbo_queue = MPQueue() if RECORD_BBO else None
+        self.l2book_queue = MPQueue() if RECORD_L2BOOK else None
+        self.candles_queue = MPQueue() if RECORD_CANDLES else None
     
     def _write_jsonl(self, file_handle, data: Dict[str, Any]):
         """Write a JSON line to file."""
@@ -351,14 +517,20 @@ class DataRecorder:
     
     def _process_blockchain_queue(self):
         """Process messages from blockchain queue."""
+        if not RECORD_BLOCKS and not RECORD_TRANSACTIONS:
+            return
+        if self.blockchain_queue is None:
+            return
+            
         while not self.blockchain_queue.empty():
             try:
                 msg = self.blockchain_queue.get_nowait()
                 if msg.get("type") == "block":
                     block = msg.get("data")
                     if block:
-                        self._write_jsonl(self.blocks_file, block)
-                        self.metrics['blocks_received'] += 1
+                        if RECORD_BLOCKS and self.blocks_file:
+                            self._write_jsonl(self.blocks_file, block)
+                            self.metrics['blocks_received'] += 1
                         
                         # Track last block number (keep in hex format as from chain)
                         block_number = block.get("number")
@@ -380,10 +552,11 @@ class DataRecorder:
                                 self.metrics['last_block_number'] = hex(block_number)
                         
                         # Extract and save transactions
-                        transactions = block.get("transactions", [])
-                        for tx in transactions:
-                            self._write_jsonl(self.transactions_file, tx)
-                            self.metrics['transactions_received'] += 1
+                        if RECORD_TRANSACTIONS and self.transactions_file:
+                            transactions = block.get("transactions", [])
+                            for tx in transactions:
+                                self._write_jsonl(self.transactions_file, tx)
+                                self.metrics['transactions_received'] += 1
                 elif msg.get("type") == "error":
                     print(f"[ERROR] Blockchain: {msg.get('error')}")
             except:
@@ -391,6 +564,8 @@ class DataRecorder:
     
     def _process_api_queue(self, queue, file_handle, metric_key, channel_name):
         """Process messages from an API queue."""
+        if queue is None or file_handle is None:
+            return
         while not queue.empty():
             try:
                 msg = queue.get_nowait()
@@ -411,24 +586,34 @@ class DataRecorder:
     
     def _start_processes(self):
         """Start all subscription processes."""
-        # Start blockchain process
-        p = Process(target=blockchain_worker, args=(self.stop_event, self.blockchain_queue, MAINNET_RPC_WS))
-        p.start()
-        self.processes.append(p)
-        print("Started blockchain subscription process")
+        # Start blockchain process (if blocks or transactions are enabled)
+        if RECORD_BLOCKS or RECORD_TRANSACTIONS:
+            if self.blockchain_queue:
+                p = Process(target=blockchain_worker, args=(self.stop_event, self.blockchain_queue, MAINNET_RPC_WS))
+                p.start()
+                self.processes.append(p)
+                print("Started blockchain subscription process")
         
         # Start API subscription processes
         queue_map = {
-            "trades": (self.trades_queue, self.trades_file, "trades_received", "trades"),
-            "bbo": (self.bbo_queue, self.bbo_file, "bbo_received", "bbo"),
-            "l2Book": (self.l2book_queue, self.l2book_file, "l2book_received", "l2Book")
+            "trades": (RECORD_TRADES, self.trades_queue, self.trades_file, "trades_received", "trades"),
+            "bbo": (RECORD_BBO, self.bbo_queue, self.bbo_file, "bbo_received", "bbo"),
+            "l2Book": (RECORD_L2BOOK, self.l2book_queue, self.l2book_file, "l2book_received", "l2Book")
         }
         
-        for channel, (queue, file_handle, metric_key, channel_name) in queue_map.items():
-            p = Process(target=api_subscription_worker, args=(self.stop_event, queue, channel, API_TOKENS))
+        for channel, (enabled, queue, file_handle, metric_key, channel_name) in queue_map.items():
+            if enabled and queue:
+                p = Process(target=api_subscription_worker, args=(self.stop_event, queue, channel, API_TOKENS))
+                p.start()
+                self.processes.append(p)
+                print(f"Started {channel} subscription process")
+        
+        # Start candle subscription process
+        if RECORD_CANDLES and self.candles_queue:
+            p = Process(target=candle_subscription_worker, args=(self.stop_event, self.candles_queue, API_TOKENS, CANDLE_INTERVAL))
             p.start()
             self.processes.append(p)
-            print(f"Started {channel} subscription process")
+            print(f"Started candle subscription process (interval: {CANDLE_INTERVAL})")
     
     def _generate_report(self):
         """Generate data collection report."""
@@ -445,20 +630,34 @@ class DataRecorder:
             
             f.write("METRICS:\n")
             f.write("-" * 80 + "\n")
-            f.write(f"Blocks received: {self.metrics['blocks_received']}\n")
-            f.write(f"Transactions received: {self.metrics['transactions_received']}\n")
-            f.write(f"Trades received: {self.metrics['trades_received']}\n")
-            f.write(f"BBO updates received: {self.metrics['bbo_received']}\n")
-            f.write(f"L2Book updates received: {self.metrics['l2book_received']}\n")
+            if RECORD_BLOCKS:
+                f.write(f"Blocks received: {self.metrics['blocks_received']}\n")
+            if RECORD_TRANSACTIONS:
+                f.write(f"Transactions received: {self.metrics['transactions_received']}\n")
+            if RECORD_TRADES:
+                f.write(f"Trades received: {self.metrics['trades_received']}\n")
+            if RECORD_BBO:
+                f.write(f"BBO updates received: {self.metrics['bbo_received']}\n")
+            if RECORD_L2BOOK:
+                f.write(f"L2Book updates received: {self.metrics['l2book_received']}\n")
+            if RECORD_CANDLES:
+                f.write(f"Candles received: {self.metrics['candles_received']}\n")
             f.write(f"Total subscriptions made: {self.metrics['subscriptions_made']}\n\n")
             
             f.write("DATA FILES:\n")
             f.write("-" * 80 + "\n")
-            f.write(f"Blocks: {BLOCKS_FILE}\n")
-            f.write(f"Transactions: {TRANSACTIONS_FILE}\n")
-            f.write(f"Trades: {TRADES_FILE}\n")
-            f.write(f"BBO: {BBO_FILE}\n")
-            f.write(f"L2Book: {L2BOOK_FILE}\n")
+            if RECORD_BLOCKS:
+                f.write(f"Blocks: {BLOCKS_FILE}\n")
+            if RECORD_TRANSACTIONS:
+                f.write(f"Transactions: {TRANSACTIONS_FILE}\n")
+            if RECORD_TRADES:
+                f.write(f"Trades: {TRADES_FILE}\n")
+            if RECORD_BBO:
+                f.write(f"BBO: {BBO_FILE}\n")
+            if RECORD_L2BOOK:
+                f.write(f"L2Book: {L2BOOK_FILE}\n")
+            if RECORD_CANDLES:
+                f.write(f"Candles: {CANDLES_FILE}\n")
         
         print(f"\nData collection report saved to: {METRICS_FILE}")
     
@@ -483,10 +682,16 @@ class DataRecorder:
             last_status = time.time()
             while self.running:
                 # Process queues
-                self._process_blockchain_queue()
-                self._process_api_queue(self.trades_queue, self.trades_file, "trades_received", "trades")
-                self._process_api_queue(self.bbo_queue, self.bbo_file, "bbo_received", "bbo")
-                self._process_api_queue(self.l2book_queue, self.l2book_file, "l2book_received", "l2Book")
+                if RECORD_BLOCKS or RECORD_TRANSACTIONS:
+                    self._process_blockchain_queue()
+                if RECORD_TRADES:
+                    self._process_api_queue(self.trades_queue, self.trades_file, "trades_received", "trades")
+                if RECORD_BBO:
+                    self._process_api_queue(self.bbo_queue, self.bbo_file, "bbo_received", "bbo")
+                if RECORD_L2BOOK:
+                    self._process_api_queue(self.l2book_queue, self.l2book_file, "l2book_received", "l2Book")
+                if RECORD_CANDLES:
+                    self._process_api_queue(self.candles_queue, self.candles_file, "candles_received", "candle")
                 
                 # Print status every 10 seconds
                 if time.time() - last_status > 10:
@@ -505,13 +710,24 @@ class DataRecorder:
                     time_parts.append(f"{seconds}s")
                     time_str = " ".join(time_parts)
                     
-                    last_block_str = f"#{self.metrics['last_block_number']}" if self.metrics['last_block_number'] is not None else "#N/A"
-                    print(f"[STATUS] Blocks: {self.metrics['blocks_received']}, last block {last_block_str}, "
-                          f"TXs: {self.metrics['transactions_received']}, "
-                          f"Trades: {self.metrics['trades_received']}, "
-                          f"BBO: {self.metrics['bbo_received']}, "
-                          f"L2Book: {self.metrics['l2book_received']}, "
-                          f"time took: {time_str}")
+                    # Build status line with only enabled recorders
+                    status_parts = []
+                    if RECORD_BLOCKS:
+                        last_block_str = f"#{self.metrics['last_block_number']}" if self.metrics['last_block_number'] is not None else "#N/A"
+                        status_parts.append(f"Blocks: {self.metrics['blocks_received']}, last block {last_block_str}")
+                    if RECORD_TRANSACTIONS:
+                        status_parts.append(f"TXs: {self.metrics['transactions_received']}")
+                    if RECORD_TRADES:
+                        status_parts.append(f"Trades: {self.metrics['trades_received']}")
+                    if RECORD_BBO:
+                        status_parts.append(f"BBO: {self.metrics['bbo_received']}")
+                    if RECORD_L2BOOK:
+                        status_parts.append(f"L2Book: {self.metrics['l2book_received']}")
+                    if RECORD_CANDLES:
+                        status_parts.append(f"Candles: {self.metrics['candles_received']}")
+                    
+                    status_parts.append(f"time took: {time_str}")
+                    print(f"[STATUS] {', '.join(status_parts)}")
                     last_status = time.time()
                 
                 time.sleep(0.1)
@@ -530,12 +746,19 @@ class DataRecorder:
         for p in self.processes:
             p.join(timeout=5)
         
-        # Close files
-        self.blocks_file.close()
-        self.transactions_file.close()
-        self.trades_file.close()
-        self.bbo_file.close()
-        self.l2book_file.close()
+        # Close files (only if they were opened)
+        if self.blocks_file:
+            self.blocks_file.close()
+        if self.transactions_file:
+            self.transactions_file.close()
+        if self.trades_file:
+            self.trades_file.close()
+        if self.bbo_file:
+            self.bbo_file.close()
+        if self.l2book_file:
+            self.l2book_file.close()
+        if self.candles_file:
+            self.candles_file.close()
         
         # Generate report
         self._generate_report()
