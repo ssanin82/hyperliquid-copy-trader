@@ -1,16 +1,27 @@
 # Hyperliquid Copy Trader - Wallet Profiling System
 
-A Python package for tracking Hyperliquid trading activity, recording market data, and using machine learning to detect and classify profitable traders using real-time data streams.
+<table>
+<tr>
+<td style="width: 50%; vertical-align: top; padding-right: 20px;">
+<p>A Python package for tracking Hyperliquid trading activity, recording market data, and using machine learning to detect and classify profitable traders using real-time data streams.</p>
 
-## Overview
+<h2>Overview</h2>
 
-This system consists of three main stages:
+<p>This system consists of three main stages:</p>
 
-1. **Data Collection (`1_record_data.py`)**: Subscribes to blockchain events and Hyperliquid public API streams to record trading data
-2. **Model Training & Classification (`2_run_model.py`)**: Uses PyTorch multi-task learning to analyze wallets and classify trader behavior
-3. **Visualization (`3_frontend.py`)**: Generates an interactive HTML dashboard to visualize wallet profiling results
+<ol>
+<li><strong>Data Collection (`1_record_data.py`)</strong>: Subscribes to blockchain events and Hyperliquid public API streams to record trading data</li>
+<li><strong>Model Training & Classification (`2_run_model.py`)</strong>: Uses PyTorch multi-task learning to analyze wallets and classify trader behavior</li>
+<li><strong>Visualization (`3_frontend.py`)</strong>: Generates an interactive HTML dashboard to visualize wallet profiling results</li>
+</ol>
 
-The system monitors trading activity on Hyperliquid (a decentralized exchange on its own L1 blockchain) by subscribing to trading events and recording them in a parseable, human-readable format. The recorded data is designed for machine learning tasks related to profitable trader detection and wallet classification.
+<p>The system monitors trading activity on Hyperliquid (a decentralized exchange on its own L1 blockchain) by subscribing to trading events and recording them in a parseable, human-readable format. The recorded data is designed for machine learning tasks related to profitable trader detection and wallet classification.</p>
+</td>
+<td style="width: 50%; vertical-align: top;">
+<img src="paper.png" alt="paper" style="width: 100%; max-width: 100%;">
+</td>
+</tr>
+</table>
 
 ## Why WebSocket Streams vs Blockchain Events?
 
