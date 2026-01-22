@@ -308,9 +308,11 @@ class DataRecorder:
             'trades_received': 0,
             'bbo_received': 0,
             'l2book_received': 0,
-            'start_time': None,
+            'start_time': None,  # ISO string
+            'start_timestamp': None,  # Unix timestamp for calculations
             'end_time': None,
-            'subscriptions_made': 0
+            'subscriptions_made': 0,
+            'last_block_number': None  # Last recorded block number
         }
         
         # Queues
@@ -339,6 +341,25 @@ class DataRecorder:
                     if block:
                         self._write_jsonl(self.blocks_file, block)
                         self.metrics['blocks_received'] += 1
+                        
+                        # Track last block number (keep in hex format as from chain)
+                        block_number = block.get("number")
+                        if block_number:
+                            # Keep as hex string if it's already hex, otherwise convert to hex
+                            if isinstance(block_number, str):
+                                # Already in hex format (e.g., "0x180dab8")
+                                if block_number.startswith("0x"):
+                                    self.metrics['last_block_number'] = block_number
+                                else:
+                                    # Try to convert decimal string to hex
+                                    try:
+                                        num = int(block_number)
+                                        self.metrics['last_block_number'] = hex(num)
+                                    except ValueError:
+                                        pass
+                            elif isinstance(block_number, int):
+                                # Convert int to hex
+                                self.metrics['last_block_number'] = hex(block_number)
                         
                         # Extract and save transactions
                         transactions = block.get("transactions", [])
@@ -394,7 +415,7 @@ class DataRecorder:
     def _generate_report(self):
         """Generate data collection report."""
         self.metrics['end_time'] = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-        duration = time.time() - self.metrics['start_time'] if self.metrics['start_time'] else 0
+        duration = time.time() - self.metrics['start_timestamp'] if self.metrics['start_timestamp'] else 0
         
         with open(METRICS_FILE, 'w') as f:
             f.write("=" * 80 + "\n")
@@ -426,6 +447,7 @@ class DataRecorder:
     def start(self):
         """Start recording data."""
         self.running = True
+        self.metrics['start_timestamp'] = time.time()
         self.metrics['start_time'] = datetime.now(UTC).isoformat().replace('+00:00', 'Z')
         
         print("=" * 80)
@@ -450,11 +472,28 @@ class DataRecorder:
                 
                 # Print status every 10 seconds
                 if time.time() - last_status > 10:
-                    print(f"[STATUS] Blocks: {self.metrics['blocks_received']}, "
+                    # Calculate elapsed time
+                    elapsed = time.time() - self.metrics['start_timestamp'] if self.metrics['start_timestamp'] else 0
+                    hours = int(elapsed // 3600)
+                    minutes = int((elapsed % 3600) // 60)
+                    seconds = int(elapsed % 60)
+                    
+                    # Format time string - only show non-zero units
+                    time_parts = []
+                    if hours > 0:
+                        time_parts.append(f"{hours}h")
+                    if minutes > 0:
+                        time_parts.append(f"{minutes}m")
+                    time_parts.append(f"{seconds}s")
+                    time_str = " ".join(time_parts)
+                    
+                    last_block_str = f"#{self.metrics['last_block_number']}" if self.metrics['last_block_number'] is not None else "#N/A"
+                    print(f"[STATUS] Blocks: {self.metrics['blocks_received']}, last block {last_block_str}, "
                           f"TXs: {self.metrics['transactions_received']}, "
                           f"Trades: {self.metrics['trades_received']}, "
                           f"BBO: {self.metrics['bbo_received']}, "
-                          f"L2Book: {self.metrics['l2book_received']}")
+                          f"L2Book: {self.metrics['l2book_received']}, "
+                          f"time took: {time_str}")
                     last_status = time.time()
                 
                 time.sleep(0.1)
