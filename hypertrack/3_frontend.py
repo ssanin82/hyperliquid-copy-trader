@@ -191,7 +191,12 @@ def create_wallet_card_html(wallet: Dict[str, Any], index: int) -> tuple:
     card_html = f'''
     <div class="wallet-card">
         <div class="card-header">
-            <h5 class="card-title">{address_short}</h5>
+            <div class="address-header">
+                <h5 class="card-title">{address_short}</h5>
+                <button class="copy-button" onclick="copyAddress('{address}', 'copy-btn-{index}')" id="copy-btn-{index}" title="Copy address">
+                    <span class="copy-icon">⧉</span>
+                </button>
+            </div>
             <small class="text-muted address-full">{address}</small>
         </div>
         <div class="card-body">
@@ -393,19 +398,103 @@ def generate_static_html(data: Dict[str, Any], output_path: str):
             border-bottom: 1px solid #2d2d44;
         }}
         
+        .address-header {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            margin-bottom: 0.25rem;
+        }}
+        
         .card-title {{
             font-family: 'Courier New', monospace;
             font-size: 1.1rem;
-            margin-bottom: 0.25rem;
+            margin: 0;
             color: #ffffff;
+            flex: 1;
+        }}
+        
+        .address-full-row {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
         }}
         
         .address-full {{
             font-family: 'Courier New', monospace;
             font-size: 0.7rem;
             color: #6b7280;
-            display: block;
             word-break: break-all;
+            flex: 1;
+        }}
+        
+        .copy-button {{
+            background: rgba(59, 130, 246, 0.2);
+            border: 1px solid #3b82f6;
+            color: #3b82f6;
+            padding: 0.4rem 0.6rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 32px;
+            height: 32px;
+        }}
+        
+        .copy-button:hover {{
+            background: rgba(59, 130, 246, 0.3);
+            transform: scale(1.05);
+        }}
+        
+        .copy-button:active {{
+            transform: scale(0.95);
+        }}
+        
+        .copy-button.copied {{
+            background: rgba(16, 185, 129, 0.2);
+            border-color: #10b981;
+            color: #10b981;
+        }}
+        
+        .copy-button-small {{
+            background: rgba(59, 130, 246, 0.15);
+            border: 1px solid #3b82f6;
+            color: #3b82f6;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.7rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+        }}
+        
+        .copy-button-small:hover {{
+            background: rgba(59, 130, 246, 0.25);
+            transform: scale(1.1);
+        }}
+        
+        .copy-button-small:active {{
+            transform: scale(0.9);
+        }}
+        
+        .copy-button-small.copied {{
+            background: rgba(16, 185, 129, 0.2);
+            border-color: #10b981;
+            color: #10b981;
+        }}
+        
+        .copy-icon {{
+            font-size: 0.9rem;
+            line-height: 1;
         }}
         
         .card-body {{
@@ -740,6 +829,46 @@ def generate_static_html(data: Dict[str, Any], output_path: str):
                 closeDocs();
             }}
         }});
+        
+        // Copy address to clipboard
+        function copyAddress(address, buttonId) {{
+            navigator.clipboard.writeText(address).then(function() {{
+                // Visual feedback
+                const button = document.getElementById(buttonId);
+                const originalClass = button.className;
+                button.classList.add('copied');
+                button.title = 'Copied!';
+                
+                // Reset after 2 seconds
+                setTimeout(function() {{
+                    button.classList.remove('copied');
+                    button.title = 'Copy address';
+                }}, 2000);
+            }}).catch(function(err) {{
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = address;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-999999px';
+                textArea.style.top = '-999999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {{
+                    document.execCommand('copy');
+                    const button = document.getElementById(buttonId);
+                    button.classList.add('copied');
+                    button.title = 'Copied!';
+                    setTimeout(function() {{
+                        button.classList.remove('copied');
+                        button.title = 'Copy address';
+                    }}, 2000);
+                }} catch (err) {{
+                    console.error('Failed to copy:', err);
+                }}
+                document.body.removeChild(textArea);
+            }});
+        }}
     </script>
 </body>
 </html>
