@@ -25,7 +25,25 @@ HYPERLIQUID_API_WS = "wss://api.hyperliquid.xyz/ws"
 
 API_TOKENS = [
     "ETH",       # Ethereum
-    # Add more tokens as needed
+    # "HYPE",      # Hyperliquid native token
+    # "BTC",       # Bitcoin
+    # "SOL",       # Solana
+    # "AVAX",      # Avalanche
+    # "OP",        # Optimism
+    # "BNB",       # Binance Coin
+    # "DOGE",      # Dogecoin
+    # "LINK",      # Chainlink
+    # "MATIC",     # Polygon
+    # "LTC",       # Litecoin
+    # "ARB",       # Arbitrum
+    # "FTM",       # Fantom
+    # "XRP",       # Ripple
+    # "ETC",       # Ethereum Classic
+    # "APE",       # ApeCoin
+    # "PUMP",      # Pump token (high volume meme token) 
+    # "PURR",      # Hypurr Fun / PURR
+    # "KNTQ",      # Kinetiq
+    # "SEDA"       # SEDA Protocol token
 ]
 
 # Output directory for recorded data

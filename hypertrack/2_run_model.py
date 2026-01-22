@@ -8,7 +8,6 @@ trains the model, and generates final_report.txt.
 import json
 import time
 import os
-import sys
 from datetime import datetime, UTC
 from typing import Dict, Any, List, Optional
 import numpy as np
@@ -17,13 +16,6 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import statistics
 import math
-
-# Import classes from wallet_profiler
-sys.path.insert(0, os.path.dirname(__file__))
-from wallet_profiler import (
-    WalletFeatures, WalletMTLModel, WalletDataset,
-    MAINNET_RPC_HTTP
-)
 
 # Constants
 DATA_DIR = "recorded_data"

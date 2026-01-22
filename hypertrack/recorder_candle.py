@@ -14,6 +14,7 @@ import json
 import time
 import signal
 import sys
+import os
 from datetime import datetime, UTC
 from typing import Optional, Dict, Any
 import websocket
@@ -37,7 +38,10 @@ class CandleRecorder:
             testnet: Use testnet endpoints
         """
         self.token = token if token is not None else TOKEN
-        self.output_file = output_file if output_file is not None else f"candle_{self.token}.log"
+        # Create sample_data directory if it doesn't exist
+        os.makedirs("sample_data", exist_ok=True)
+        default_file = os.path.join("sample_data", f"candle_{self.token}.log")
+        self.output_file = output_file if output_file is not None else default_file
         self.interval = interval if interval is not None else CANDLE_INTERVAL
         self.testnet = testnet
         self.ws_url = self.TESTNET_WS_URL if testnet else self.MAINNET_WS_URL
@@ -82,39 +86,65 @@ class CandleRecorder:
         try:
             data = json.loads(message)
             
+            # Debug: log all messages to understand the format
+            if not hasattr(self, '_message_count'):
+                self._message_count = 0
+            self._message_count += 1
+            
+            if self._message_count <= 5:  # Log first 5 messages
+                print(f"[DEBUG] Received message #{self._message_count}: {json.dumps(data, separators=(',', ':'))[:500]}")
+            
+            # Handle subscription response
+            if data.get("channel") == "subscriptionResponse":
+                print(f"[DEBUG] Subscription response: {json.dumps(data, separators=(',', ':'))}")
+                return
+            
             # Handle candle messages
             if "channel" in data and data["channel"] == "candle":
+                print(f"[DEBUG] Received candle channel message")
                 if "data" in data:
                     candle_data = data["data"]
+                    print(f"[DEBUG] Candle data type: {type(candle_data)}, content: {json.dumps(candle_data, separators=(',', ':'))[:300] if isinstance(candle_data, (dict, list)) else str(candle_data)[:300]}")
+                    
                     # Check if this candle is for our token
+                    # Candle data uses "s" field for symbol/coin, not "coin"
                     # Candle data might be a list or dict, handle both
                     if isinstance(candle_data, list):
+                        print(f"[DEBUG] Candle data is a list with {len(candle_data)} items")
                         for candle in candle_data:
-                            candle_coin = candle.get("coin", "") if isinstance(candle, dict) else ""
+                            # Check both "s" (symbol) and "coin" fields
+                            candle_coin = candle.get("s", candle.get("coin", "")) if isinstance(candle, dict) else ""
+                            print(f"[DEBUG] Checking candle coin: '{candle_coin}' vs token: '{self.token}'")
                             if candle_coin == self.token:
                                 if not self.running:
                                     return
+                                print(f"[DEBUG] Recording candle for {self.token}")
                                 self._record_candle(candle)
                     elif isinstance(candle_data, dict):
-                        candle_coin = candle_data.get("coin", "")
+                        # Check both "s" (symbol) and "coin" fields
+                        candle_coin = candle_data.get("s", candle_data.get("coin", ""))
+                        print(f"[DEBUG] Candle data is dict, coin: '{candle_coin}' vs token: '{self.token}'")
                         if candle_coin == self.token:
                             if not self.running:
                                 return
+                            print(f"[DEBUG] Recording candle for {self.token}")
                             self._record_candle(candle_data)
             
-            # Also handle direct candle data
+            # Also handle direct candle data (without channel wrapper)
             elif "data" in data:
                 candle_data = data["data"]
                 if isinstance(candle_data, list):
                     for candle in candle_data:
-                        if isinstance(candle, dict) and "coin" in candle:
-                            candle_coin = candle.get("coin", "")
+                        if isinstance(candle, dict):
+                            # Check both "s" (symbol) and "coin" fields
+                            candle_coin = candle.get("s", candle.get("coin", ""))
                             if candle_coin == self.token:
                                 if not self.running:
                                     return
                                 self._record_candle(candle)
-                elif isinstance(candle_data, dict) and "coin" in candle_data:
-                    candle_coin = candle_data.get("coin", "")
+                elif isinstance(candle_data, dict):
+                    # Check both "s" (symbol) and "coin" fields
+                    candle_coin = candle_data.get("s", candle_data.get("coin", ""))
                     if candle_coin == self.token:
                         if not self.running:
                             return

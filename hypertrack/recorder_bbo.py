@@ -13,6 +13,7 @@ import json
 import time
 import signal
 import sys
+import os
 from datetime import datetime, UTC
 from typing import Optional, Dict, Any
 import websocket
@@ -35,7 +36,10 @@ class BBORecorder:
             testnet: Use testnet endpoints
         """
         self.token = token if token is not None else TOKEN
-        self.output_file = output_file if output_file is not None else f"bbo_{self.token}.log"
+        # Create sample_data directory if it doesn't exist
+        os.makedirs("sample_data", exist_ok=True)
+        default_file = os.path.join("sample_data", f"bbo_{self.token}.log")
+        self.output_file = output_file if output_file is not None else default_file
         self.testnet = testnet
         self.ws_url = self.TESTNET_WS_URL if testnet else self.MAINNET_WS_URL
         
