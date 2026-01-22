@@ -7,3 +7,6 @@ websocket-client>=1.6.0
 # Machine learning (for wallet_profiler.py)
 torch>=2.0.0
 numpy>=1.24.0
+
+# Frontend visualization (for 3_frontend.py)
+plotly>=5.0.0
