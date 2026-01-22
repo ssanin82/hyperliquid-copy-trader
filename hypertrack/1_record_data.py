@@ -51,7 +51,7 @@ RECORD_TRANSACTIONS = True
 RECORD_TRADES = True
 RECORD_BBO = True
 RECORD_L2BOOK = True
-RECORD_CANDLES = False
+RECORD_CANDLES = True
 
 # Candle interval
 CANDLE_INTERVAL = "1m"  # Supported: "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M"
@@ -161,16 +161,17 @@ def blockchain_worker(stop_event: Event, output_queue: MPQueue, rpc_url: str):
             pass
         
         # Main loop with reconnection
+        ws_instance = None
         while not stop_event.is_set():
             try:
-                ws = websocket.WebSocketApp(
+                ws_instance = websocket.WebSocketApp(
                     rpc_url,
                     on_message=on_message,
                     on_error=on_error,
                     on_close=on_close,
                     on_open=on_open
                 )
-                ws.run_forever(ping_interval=30, ping_timeout=10)
+                ws_instance.run_forever(ping_interval=30, ping_timeout=10)
             except KeyboardInterrupt:
                 break
             except Exception as e:
@@ -180,6 +181,13 @@ def blockchain_worker(stop_event: Event, output_queue: MPQueue, rpc_url: str):
                         "source": "blockchain",
                         "error": str(e)
                     })
+            
+            # Close WebSocket if stop event is set
+            if stop_event.is_set() and ws_instance:
+                try:
+                    ws_instance.close()
+                except:
+                    pass
             
             # Reconnect with exponential backoff
             if not stop_event.is_set():
@@ -275,6 +283,7 @@ def api_subscription_worker(stop_event: Event, output_queue: MPQueue, channel: s
             pass
         
         # Main loop with reconnection
+        ws_instance = None
         while not stop_event.is_set():
             try:
                 ws_instance = websocket.WebSocketApp(
@@ -294,6 +303,13 @@ def api_subscription_worker(stop_event: Event, output_queue: MPQueue, channel: s
                         "source": channel,
                         "error": str(e)
                     })
+            
+            # Close WebSocket if stop event is set
+            if stop_event.is_set() and ws_instance:
+                try:
+                    ws_instance.close()
+                except:
+                    pass
             
             # Reconnect with exponential backoff
             if not stop_event.is_set():
@@ -318,6 +334,10 @@ def candle_subscription_worker(stop_event: Event, output_queue: MPQueue, coins: 
         reconnect_delay = 2
         max_reconnect_delay = 60
         
+        # Track the latest candle for each coin by t (open time)
+        # When we see a new t for the same coin, the previous candle is complete
+        latest_candles = {}  # key: coin, value: (t, candle_dict)
+        
         def on_message(ws, message):
             """Handle WebSocket messages."""
             if stop_event.is_set():
@@ -336,30 +356,49 @@ def candle_subscription_worker(stop_event: Event, output_queue: MPQueue, coins: 
                 if message_channel == "candle" and "data" in data:
                     candle_data = data["data"]
                     
-                    # Candle data can be a list or dict
-                    # Candle data uses "s" field for symbol/coin
-                    candles_to_send = []
+                    # Process candles (can be list or dict)
+                    candles_to_process = []
                     
                     if isinstance(candle_data, list):
                         for candle in candle_data:
                             if isinstance(candle, dict):
-                                # Check both "s" (symbol) and "coin" fields
                                 candle_coin = candle.get("s", candle.get("coin", ""))
                                 if candle_coin in coins:
-                                    candles_to_send.append(candle)
+                                    candles_to_process.append(candle)
                     elif isinstance(candle_data, dict):
-                        # Check both "s" (symbol) and "coin" fields
                         candle_coin = candle_data.get("s", candle_data.get("coin", ""))
                         if candle_coin in coins:
-                            candles_to_send.append(candle_data)
+                            candles_to_process.append(candle_data)
                     
-                    # Send each candle to main process
-                    for candle in candles_to_send:
-                        output_queue.put({
-                            "type": "api_data",
-                            "channel": "candle",
-                            "data": {"channel": "candle", "data": candle}
-                        })
+                    # Process each candle to filter completed ones only
+                    for candle in candles_to_process:
+                        candle_coin = candle.get("s", candle.get("coin", ""))
+                        candle_t = candle.get("t")  # Open time in milliseconds
+                        
+                        if candle_t is None:
+                            continue
+                        
+                        # Check if we have a previous candle for this coin
+                        if candle_coin in latest_candles:
+                            prev_t, prev_candle = latest_candles[candle_coin]
+                            
+                            # If this is the same t, it's an intra-candle update - just update
+                            if prev_t == candle_t:
+                                latest_candles[candle_coin] = (candle_t, candle)
+                            # If this is a new t, the previous candle is complete - send it
+                            elif candle_t > prev_t:
+                                # Send the completed previous candle
+                                output_queue.put({
+                                    "type": "api_data",
+                                    "channel": "candle",
+                                    "data": {"channel": "candle", "data": prev_candle}
+                                })
+                                # Update to the new candle
+                                latest_candles[candle_coin] = (candle_t, candle)
+                            # If t < prev_t, it might be a late/out-of-order update, ignore it
+                        else:
+                            # First candle for this coin - just store it
+                            latest_candles[candle_coin] = (candle_t, candle)
             except Exception as e:
                 if not stop_event.is_set():
                     output_queue.put({
@@ -417,6 +456,7 @@ def candle_subscription_worker(stop_event: Event, output_queue: MPQueue, coins: 
             pass
         
         # Main loop with reconnection
+        ws_instance = None
         while not stop_event.is_set():
             try:
                 ws_instance = websocket.WebSocketApp(
@@ -436,6 +476,13 @@ def candle_subscription_worker(stop_event: Event, output_queue: MPQueue, coins: 
                         "source": "candle",
                         "error": str(e)
                     })
+            
+            # Close WebSocket if stop event is set
+            if stop_event.is_set() and ws_instance:
+                try:
+                    ws_instance.close()
+                except:
+                    pass
             
             # Reconnect with exponential backoff
             if not stop_event.is_set():
@@ -742,9 +789,18 @@ class DataRecorder:
         self.running = False
         self.stop_event.set()
         
-        # Wait for processes
+        # Wait for processes with timeout, then forcefully terminate if needed
         for p in self.processes:
-            p.join(timeout=5)
+            if p.is_alive():
+                p.join(timeout=3)
+                if p.is_alive():
+                    print(f"Forcefully terminating process {p.pid}")
+                    p.terminate()
+                    p.join(timeout=2)
+                    if p.is_alive():
+                        print(f"Forcefully killing process {p.pid}")
+                        p.kill()
+                        p.join(timeout=1)
         
         # Close files (only if they were opened)
         if self.blocks_file:
