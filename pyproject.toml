@@ -58,8 +58,6 @@ Repository = "https://github.com/yourusername/hypertrack"
 
 [project.scripts]
 hypertrack = "hypertrack.recorder:main"
-hypertrack-chain = "hypertrack.chain_subscriber:main"
-hypertrack-profile = "hypertrack.wallet_profiler:main"
 
 [tool.setuptools]
 packages = ["hypertrack"]
