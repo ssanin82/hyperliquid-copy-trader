@@ -1,4 +1,4 @@
-<img src="paper.png" alt="paper" style="float: right; width: 50%; max-width: 500px; margin-left: 20px; margin-bottom: 20px;">
+<img src="paper.png" alt="paper" style="width: 50%; max-width: 100%;">
 
 # Hyperliquid Copy Trader - Wallet Profiling System
 
