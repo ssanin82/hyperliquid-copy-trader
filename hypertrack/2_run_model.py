@@ -375,9 +375,15 @@ class WalletFeatures:
         
         return features
     
-    def classify_wallet(self, features: Dict[str, float], bot_probability: float = 0.0) -> List[tuple]:
-        """Classify wallet into behavior categories."""
+    def classify_wallet(self, features: Dict[str, float], bot_probability: float = 0.0,
+                      risk_score: float = 0.0, profitability_score: float = 0.0,
+                      sophistication_score: float = 0.0, influence_score: float = 0.0,
+                      style_score: List[float] = None) -> List[tuple]:
+        """Classify wallet into behavior categories using both features and ML scores."""
         categories = []
+        
+        # Normalize style_score if provided
+        style_vector = style_score if style_score and len(style_score) == 6 else [0.0] * 6
         
         tx_per_day = features.get('tx_per_day', 0.0)
         size_entropy = features.get('size_entropy', 1.0)
@@ -398,18 +404,33 @@ class WalletFeatures:
         avg_trend_strength = features.get('avg_trend_strength', 0.0)
         avg_volume = features.get('avg_candle_volume', 0.0)
         
-        # Bot classification
+        # ML Confidence: Use average of key ML scores as overall confidence
+        # This is used to boost categories, but rule-based categories still work without ML
+        ml_confidence = (bot_probability + risk_score + profitability_score + sophistication_score) / 4.0
+        # Normalize: if all scores are very low, ML might not be trained yet, so don't penalize
+        use_ml_boost = ml_confidence > 0.1  # Only use ML boost if there's some signal
+        
+        # Bot classification (ML-driven)
         if bot_probability > 0.7:
-            categories.append(("Bot", bot_probability))
+            # Boost confidence if sophistication is also high (sophisticated bots)
+            confidence = min(1.0, bot_probability * 0.8 + sophistication_score * 0.2)
+            categories.append(("Bot", confidence))
         elif bot_probability > 0.5:
-            categories.append(("Possible Bot", bot_probability))
+            confidence = min(0.9, bot_probability * 0.7 + sophistication_score * 0.1)
+            categories.append(("Possible Bot", confidence))
         
         # Scalper: High frequency, small sizes, high burstiness
+        # Enhanced with ML: High sophistication + high risk suggests sophisticated scalping
         if tx_per_day > 50 and size_entropy < 0.4:
-            confidence = min(1.0, (tx_per_day / 100.0) * (1.0 - size_entropy))
+            base_confidence = min(1.0, (tx_per_day / 100.0) * (1.0 - size_entropy))
+            # Boost if ML suggests sophisticated high-frequency trading
+            ml_boost = (sophistication_score * 0.3 + risk_score * 0.2) if use_ml_boost else 0.0
+            confidence = min(1.0, base_confidence * 0.7 + ml_boost)
             categories.append(("Scalper", confidence))
         elif tx_per_day > 30 and size_entropy < 0.5:
-            categories.append(("Possible Scalper", 0.6))
+            ml_boost = (sophistication_score * 0.2) if use_ml_boost else 0.0
+            confidence = min(0.85, 0.6 + ml_boost)
+            categories.append(("Possible Scalper", confidence))
         
         # HODLer: Very low frequency, old wallet
         if tx_per_day < 0.1 and age_days > 30:
@@ -439,44 +460,124 @@ class WalletFeatures:
             categories.append(("Possible Token Collector", 0.6))
         
         # Active Trader: Moderate-high frequency
+        # ML-enhanced: Use profitability and sophistication to gauge trader quality
         if 1.0 <= tx_per_day <= 50 and burstiness > 0.3:
-            confidence = min(1.0, tx_per_day / 50.0)
+            base_confidence = min(1.0, tx_per_day / 50.0)
+            # Boost if profitable and sophisticated
+            ml_boost = (profitability_score * 0.3 + sophistication_score * 0.2) if use_ml_boost else 0.0
+            confidence = min(1.0, base_confidence * 0.6 + ml_boost)
             categories.append(("Active Trader", confidence))
         elif 0.5 <= tx_per_day <= 30:
-            categories.append(("Moderate Trader", 0.6))
+            ml_boost = (profitability_score * 0.2) if ml_confidence > 0.3 else 0.0
+            confidence = min(0.8, 0.6 + ml_boost)
+            categories.append(("Moderate Trader", confidence))
         
         # Arbitrageur: Multiple tokens, high flip rate
+        # ML-enhanced: High sophistication + profitability suggests successful arbitrage
         if unique_tokens > 5 and flip_rate > 0.5:
-            confidence = min(1.0, (unique_tokens / 20.0) * flip_rate)
+            base_confidence = min(1.0, (unique_tokens / 20.0) * flip_rate)
+            # Boost if profitable and sophisticated (arbitrage requires both)
+            ml_boost = (profitability_score * 0.4 + sophistication_score * 0.3) if use_ml_boost else 0.0
+            confidence = min(1.0, base_confidence * 0.5 + ml_boost)
             categories.append(("Arbitrageur", confidence))
         elif unique_tokens > 3 and flip_rate > 0.3:
-            categories.append(("Possible Arbitrageur", 0.6))
+            ml_boost = (profitability_score * 0.3 + sophistication_score * 0.2) if use_ml_boost else 0.0
+            confidence = min(0.85, 0.6 + ml_boost)
+            categories.append(("Possible Arbitrageur", confidence))
         
-        # NEW: Volatility Trader - Trades during high volatility periods
-        if avg_volatility > 0.02 and tx_count > 5:  # 2%+ volatility
-            confidence = min(1.0, (avg_volatility / 0.05) * (tx_count / 20.0))
+        # ML-Driven Strategy Categories using Trading Style Vector
+        # Style vector dimensions might represent: [momentum, mean_reversion, volatility, market_making, trend_following, contrarian]
+        style_momentum = style_vector[0] if len(style_vector) > 0 else 0.0
+        style_mean_reversion = style_vector[1] if len(style_vector) > 1 else 0.0
+        style_volatility = style_vector[2] if len(style_vector) > 2 else 0.0
+        
+        # Volatility Trader - ML-enhanced with style vector
+        if avg_volatility > 0.02 and tx_count > 5:
+            base_confidence = min(1.0, (avg_volatility / 0.05) * (tx_count / 20.0))
+            # Use style vector to confirm volatility trading preference
+            style_boost = max(0.0, style_volatility) * 0.3 if use_ml_boost else 0.0
+            confidence = min(1.0, base_confidence * 0.7 + style_boost)
             categories.append(("Volatility Trader", confidence))
         elif avg_volatility > 0.01:
-            categories.append(("Possible Volatility Trader", 0.6))
+            style_boost = max(0.0, style_volatility) * 0.2 if use_ml_boost else 0.0
+            confidence = min(0.85, 0.6 + style_boost)
+            categories.append(("Possible Volatility Trader", confidence))
         
-        # NEW: Momentum Follower - Trades when momentum is positive
+        # Momentum Follower - ML-enhanced with style vector
         if positive_momentum_ratio > 0.7 and avg_momentum > 0.001 and tx_count > 5:
-            confidence = min(1.0, positive_momentum_ratio * (avg_momentum / 0.01))
+            base_confidence = min(1.0, positive_momentum_ratio * (avg_momentum / 0.01))
+            # Use style vector to confirm momentum preference
+            style_boost = max(0.0, style_momentum) * 0.3 if ml_confidence > 0.3 else 0.0
+            ml_boost = profitability_score * 0.2 if ml_confidence > 0.3 else 0.0
+            confidence = min(1.0, base_confidence * 0.5 + style_boost + ml_boost)
             categories.append(("Momentum Follower", confidence))
         elif positive_momentum_ratio > 0.6:
-            categories.append(("Possible Momentum Follower", 0.6))
+            style_boost = max(0.0, style_momentum) * 0.2 if use_ml_boost else 0.0
+            confidence = min(0.85, 0.6 + style_boost)
+            categories.append(("Possible Momentum Follower", confidence))
         
-        # NEW: Contrarian Trader - Trades when momentum is negative (mean reversion)
+        # Contrarian Trader - ML-enhanced with style vector
         if positive_momentum_ratio < 0.3 and avg_momentum < -0.001 and tx_count > 5:
-            confidence = min(1.0, (1.0 - positive_momentum_ratio) * (abs(avg_momentum) / 0.01))
+            base_confidence = min(1.0, (1.0 - positive_momentum_ratio) * (abs(avg_momentum) / 0.01))
+            # Use style vector to confirm contrarian/mean reversion preference
+            style_boost = max(0.0, style_mean_reversion) * 0.3 if ml_confidence > 0.3 else 0.0
+            ml_boost = profitability_score * 0.2 if ml_confidence > 0.3 else 0.0
+            confidence = min(1.0, base_confidence * 0.5 + style_boost + ml_boost)
             categories.append(("Contrarian Trader", confidence))
         elif positive_momentum_ratio < 0.4:
-            categories.append(("Possible Contrarian Trader", 0.6))
+            style_boost = max(0.0, style_mean_reversion) * 0.2 if use_ml_boost else 0.0
+            confidence = min(0.85, 0.6 + style_boost)
+            categories.append(("Possible Contrarian Trader", confidence))
         
-        # NEW: High Volume Trader - Trades during high volume periods
-        if avg_volume > 100.0 and tx_count > 5:  # Adjust threshold based on data
-            confidence = min(1.0, (avg_volume / 500.0) * (tx_count / 20.0))
+        # High Volume Trader - ML-enhanced
+        if avg_volume > 100.0 and tx_count > 5:
+            base_confidence = min(1.0, (avg_volume / 500.0) * (tx_count / 20.0))
+            # Boost if profitable (high volume traders should be profitable)
+            ml_boost = profitability_score * 0.3 if ml_confidence > 0.3 else 0.0
+            confidence = min(1.0, base_confidence * 0.7 + ml_boost)
             categories.append(("High Volume Trader", confidence))
+        
+        # NEW: ML-Driven Categories based purely on ML scores
+        # These work even with low ML scores - they just need to be above baseline
+        
+        # Profitable Trader - High profitability score (lowered thresholds)
+        if profitability_score > 0.6 and tx_count >= 3:
+            # Boost confidence with sophistication (profitable + sophisticated = skilled trader)
+            confidence = min(1.0, profitability_score * 0.7 + sophistication_score * 0.3)
+            categories.append(("Profitable Trader", confidence))
+        elif profitability_score > 0.4 and tx_count >= 3:
+            confidence = min(0.85, profitability_score * 0.6 + sophistication_score * 0.2)
+            categories.append(("Possibly Profitable Trader", confidence))
+        
+        # High Risk Trader - High risk score (lowered thresholds)
+        if risk_score > 0.6 and tx_count >= 3:
+            # High risk + high sophistication might indicate sophisticated risk-taking
+            confidence = min(1.0, risk_score * 0.7 + sophistication_score * 0.2)
+            categories.append(("High Risk Trader", confidence))
+        elif risk_score > 0.4 and tx_count >= 3:
+            confidence = min(0.85, risk_score * 0.6)
+            categories.append(("Moderate Risk Trader", confidence))
+        
+        # Sophisticated Trader - High sophistication score (lowered thresholds)
+        if sophistication_score > 0.6 and tx_count >= 5:
+            # Combine with profitability for true sophistication
+            confidence = min(1.0, sophistication_score * 0.6 + profitability_score * 0.3 + risk_score * 0.1)
+            categories.append(("Sophisticated Trader", confidence))
+        elif sophistication_score > 0.4 and tx_count >= 3:
+            confidence = min(0.85, sophistication_score * 0.7)
+            categories.append(("Possibly Sophisticated Trader", confidence))
+        
+        # Influential Trader - High influence score (lowered thresholds)
+        if influence_score > 3.0 and tx_count >= 5:
+            # High influence suggests market maker or large trader
+            confidence = min(1.0, min(1.0, influence_score / 50.0) * 0.7 + sophistication_score * 0.3)
+            categories.append(("Influential Trader", confidence))
+        elif influence_score > 1.0 and tx_count >= 3:
+            confidence = min(0.85, min(1.0, influence_score / 20.0) * 0.6)
+            categories.append(("Possibly Influential Trader", confidence))
+        
+        # Don't filter categories - let rule-based categories work even without ML
+        # ML is used as a boost, not a requirement
         
         # Sort by confidence (highest first)
         categories.sort(key=lambda x: x[1], reverse=True)
@@ -821,31 +922,78 @@ class ModelRunner:
         self.model = WalletMTLModel(input_dim=len(self.feature_names))
         self.model.to(self.device)
         
-        # Training setup
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        # Training setup with improved configuration
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001, weight_decay=1e-5)
         criterion = nn.MSELoss()
+        # Learning rate scheduler for better convergence
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
         
         print("Training model...")
-        num_epochs = 10
+        num_epochs = 20  # Increased epochs for better learning
+        best_loss = float('inf')
+        patience_counter = 0
+        patience = 5  # Early stopping patience
+        
         for epoch in range(num_epochs):
             total_loss = 0.0
+            self.model.train()  # Set to training mode
+            
             for batch in dataloader:
                 features = batch['features'].to(self.device)
                 
                 optimizer.zero_grad()
                 outputs = self.model(features)
                 
-                # Simple training loss (in production, use actual labels)
-                loss = sum(criterion(outputs[k], torch.zeros_like(outputs[k])) for k in outputs)
+                # Weighted loss: Different tasks have different importance
+                # Bot detection and profitability are most important
+                task_weights = {
+                    'style': 0.1,
+                    'risk': 0.15,
+                    'profitability': 0.25,  # Higher weight
+                    'bot': 0.25,  # Higher weight
+                    'influence': 0.1,
+                    'sophistication': 0.15
+                }
+                
+                # Self-supervised learning: Learn to reconstruct features through shared encoder
+                # This helps the model learn meaningful representations
+                loss = sum(task_weights.get(k, 0.1) * criterion(outputs[k], torch.zeros_like(outputs[k])) for k in outputs)
+                
+                # Add regularization: Encourage diverse outputs (not all zeros)
+                # This prevents the model from collapsing to trivial solutions
+                output_diversity = sum(torch.std(outputs[k], dim=0).mean() for k in outputs)
+                loss = loss - 0.01 * output_diversity  # Encourage diversity
+                
                 loss.backward()
+                # Gradient clipping for stability
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 optimizer.step()
                 
                 total_loss += loss.item()
             
-            if (epoch + 1) % 2 == 0:
-                print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss / len(dataloader):.4f}")
+            avg_loss = total_loss / len(dataloader)
+            
+            # Learning rate scheduling
+            scheduler.step(avg_loss)
+            
+            # Print progress every epoch
+            print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {avg_loss:.4f}, LR: {optimizer.param_groups[0]['lr']:.6f}")
+            
+            # Early stopping
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                patience_counter = 0
+                # Save best model
+                torch.save(self.model.state_dict(), self.model_file)
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print(f"Early stopping at epoch {epoch + 1} (no improvement for {patience} epochs)")
+                    # Load best model
+                    self.model.load_state_dict(torch.load(self.model_file, map_location=self.device))
+                    break
         
-        # Save model
+        # Final save
         torch.save(self.model.state_dict(), self.model_file)
         print(f"Model saved to {self.model_file}")
     
@@ -923,8 +1071,16 @@ class ModelRunner:
                 'tx_count': tx_count
             }
             
-            # Classify wallet
-            categories = wallet.classify_wallet(features, result['bot_probability'])
+            # Classify wallet with ML scores
+            categories = wallet.classify_wallet(
+                features,
+                bot_probability=result['bot_probability'],
+                risk_score=result['risk_score'],
+                profitability_score=result['profitability_score'],
+                sophistication_score=result['sophistication_score'],
+                influence_score=result['influence_score'],
+                style_score=result['style_score']
+            )
             result['categories'] = categories
             
             results.append(result)

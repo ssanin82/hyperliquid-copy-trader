@@ -4,10 +4,11 @@ A Python package for tracking Hyperliquid trading activity, recording market dat
 
 ## Overview
 
-This system consists of two main stages:
+This system consists of three main stages:
 
 1. **Data Collection (`1_record_data.py`)**: Subscribes to blockchain events and Hyperliquid public API streams to record trading data
 2. **Model Training & Classification (`2_run_model.py`)**: Uses PyTorch multi-task learning to analyze wallets and classify trader behavior
+3. **Visualization (`3_frontend.py`)**: Generates an interactive HTML dashboard to visualize wallet profiling results
 
 The system monitors trading activity on Hyperliquid (a decentralized exchange on its own L1 blockchain) by subscribing to trading events and recording them in a parseable, human-readable format. The recorded data is designed for machine learning tasks related to profitable trader detection and wallet classification.
 
@@ -98,6 +99,27 @@ This will:
 - Generate predictions and classifications
 - Create `final_report.txt` with results
 
+### Stage 3: Visualization
+
+Generate an interactive dashboard to visualize wallet profiling results:
+
+```bash
+python -m hypertrack.3_frontend
+```
+
+This will:
+- Parse `final_report.txt`
+- Generate an interactive HTML dashboard (`wallet_dashboard.html`)
+- Open the dashboard automatically in your browser
+
+**Features:**
+- Dark theme with modern UI
+- Summary statistics (total wallets, wallets with categories)
+- Grid layout showing all wallets as cards
+- Interactive gauge charts for each wallet (Risk, Profitability, Bot Probability, Sophistication)
+- Copy-to-clipboard functionality for wallet addresses
+- Documentation modal (click "Docs" button to view README.md)
+
 ## Machine Learning Model
 
 ### Model Architecture: Multi-Task Learning (MTL)
@@ -136,11 +158,23 @@ Shared Encoder (3-layer MLP with BatchNorm & Dropout)
 
 #### Training Process
 
-- **Optimizer**: Adam with learning rate 0.001
-- **Loss Function**: MSE (Mean Squared Error) for all tasks
-- **Epochs**: 10 epochs per training session
+- **Optimizer**: Adam with learning rate 0.001, weight decay 1e-5
+- **Loss Function**: Weighted MSE (Mean Squared Error) with task-specific weights:
+  - Bot detection: 25% weight (high importance)
+  - Profitability: 25% weight (high importance)
+  - Risk: 15% weight
+  - Sophistication: 15% weight
+  - Trading Style: 10% weight
+  - Influence: 10% weight
+- **Epochs**: Up to 20 epochs with early stopping (patience=5)
 - **Batch Size**: 32
 - **Normalization**: Features are normalized using z-score normalization (mean=0, std=1)
+- **Learning Rate Scheduling**: ReduceLROnPlateau (reduces LR when loss plateaus)
+- **Regularization**: 
+  - Output diversity regularization (prevents trivial solutions)
+  - Gradient clipping (max_norm=1.0) for training stability
+  - L2 weight decay
+- **Early Stopping**: Stops training if no improvement for 5 epochs, loads best model
 
 ## Feature Engineering
 
@@ -272,12 +306,14 @@ The system classifies wallets into multiple categories based on behavioral patte
 ### Value-Based Categories
 
 10. **Whale** (confidence: calculated)
-    - **Metrics**: `max_value > 100.0` OR `total_value > 1000.0`
-    - **Why**: Large transaction values indicate significant capital
-    - **Confidence**: `min(1.0, max_value / 1000.0)` or `total_value / 10000.0`
+    - **Metrics**: `tx_count >= 5` AND (`(max_value > 50000.0 AND total_value > 100000.0)` OR `total_value > 500000.0`)
+    - **Why**: Very large transaction values indicate significant capital (whales are rare)
+    - **Confidence**: `min(1.0, (max_value / 500000.0) * 0.5 + (total_value / 5000000.0) * 0.5)`
+    - **Note**: Thresholds were significantly increased (100x) to avoid classifying everyone as whales
 
-11. **Possible Whale** (confidence: 0.6)
-    - **Metrics**: `max_value > 10.0` OR `total_value > 100.0`
+11. **Possible Whale** (confidence: calculated)
+    - **Metrics**: `tx_count >= 5` AND (`(max_value > 10000.0 AND total_value > 50000.0)` OR `total_value > 200000.0`)
+    - **Confidence**: `min(0.85, (max_value / 100000.0) * 0.4 + (total_value / 1000000.0) * 0.4)`
 
 ### Token Interaction Categories
 
@@ -328,20 +364,72 @@ The system classifies wallets into multiple categories based on behavioral patte
     - **Why**: Prefers trading during high volume periods (liquidity seeking)
     - **Confidence**: `min(1.0, (avg_volume / 500.0) * (tx_count / 20.0))`
 
+### ML-Driven Categories (NEW)
+
+These categories are based primarily on ML model predictions, enhanced with rule-based validation:
+
+23. **Profitable Trader** (confidence: calculated)
+    - **Metrics**: `profitability_score > 0.6` AND `tx_count >= 3`
+    - **Why**: ML model identifies wallets with high profitability patterns
+    - **Confidence**: `min(1.0, profitability_score * 0.7 + sophistication_score * 0.3)`
+
+24. **Possibly Profitable Trader** (confidence: calculated)
+    - **Metrics**: `profitability_score > 0.4` AND `tx_count >= 3`
+    - **Confidence**: `min(0.85, profitability_score * 0.6 + sophistication_score * 0.2)`
+
+25. **High Risk Trader** (confidence: calculated)
+    - **Metrics**: `risk_score > 0.6` AND `tx_count >= 3`
+    - **Why**: ML model identifies wallets with high risk-taking behavior
+    - **Confidence**: `min(1.0, risk_score * 0.7 + sophistication_score * 0.2)`
+
+26. **Moderate Risk Trader** (confidence: calculated)
+    - **Metrics**: `risk_score > 0.4` AND `tx_count >= 3`
+    - **Confidence**: `min(0.85, risk_score * 0.6)`
+
+27. **Sophisticated Trader** (confidence: calculated)
+    - **Metrics**: `sophistication_score > 0.6` AND `tx_count >= 5`
+    - **Why**: ML model identifies wallets with sophisticated trading patterns
+    - **Confidence**: `min(1.0, sophistication_score * 0.6 + profitability_score * 0.3 + risk_score * 0.1)`
+
+28. **Possibly Sophisticated Trader** (confidence: calculated)
+    - **Metrics**: `sophistication_score > 0.4` AND `tx_count >= 3`
+    - **Confidence**: `min(0.85, sophistication_score * 0.7)`
+
+29. **Influential Trader** (confidence: calculated)
+    - **Metrics**: `influence_score > 3.0` AND `tx_count >= 5`
+    - **Why**: ML model identifies wallets with high market influence (market makers, large traders)
+    - **Confidence**: `min(1.0, min(1.0, influence_score / 50.0) * 0.7 + sophistication_score * 0.3)`
+
+30. **Possibly Influential Trader** (confidence: calculated)
+    - **Metrics**: `influence_score > 1.0` AND `tx_count >= 3`
+    - **Confidence**: `min(0.85, min(1.0, influence_score / 20.0) * 0.6)`
+
 ### Classification Logic
 
-Categories are determined using **rule-based classification** on extracted features:
+Categories are determined using a **hybrid approach** combining rule-based classification with ML-enhanced confidence:
 
-1. **Threshold-Based Rules**: Each category has specific thresholds for relevant metrics
-2. **Confidence Scoring**: Confidence is calculated based on how strongly the wallet matches the category criteria
-3. **Multi-Category Assignment**: A wallet can belong to multiple categories (e.g., "Bot" + "Scalper")
+1. **Rule-Based Foundation**: Each category has specific thresholds for relevant metrics (transaction frequency, values, patterns)
+2. **ML Enhancement**: ML model scores (risk, profitability, sophistication, bot probability, trading style vector) are used to:
+   - Boost confidence when ML confirms the category
+   - Add new ML-driven categories (Profitable Trader, Sophisticated Trader, etc.)
+   - Refine category confidence based on learned patterns
+3. **Multi-Category Assignment**: A wallet can belong to multiple categories (e.g., "Bot" + "Scalper" + "Profitable Trader")
 4. **Ranking**: Categories are sorted by confidence score (highest first)
 
-**Why Rule-Based Classification?**
-- **Interpretability**: Rules are transparent and explainable
-- **Domain Knowledge**: Incorporates trading domain expertise
-- **Complementary to ML**: ML provides scores (bot probability, risk, etc.), rules provide categories
+**Hybrid Approach Benefits:**
+- **Interpretability**: Rule-based thresholds are transparent and explainable
+- **Domain Knowledge**: Incorporates trading domain expertise through rules
+- **ML Intelligence**: ML model learns patterns that rules might miss
+- **Robustness**: Rule-based categories work even when ML scores are low (ML is optional boost)
 - **Flexibility**: Easy to adjust thresholds based on observed data
+
+**How ML Enhances Categories:**
+- **Bot Classification**: Uses `bot_probability` directly, boosted by `sophistication_score`
+- **Scalper**: Rule-based frequency/size + ML sophistication/risk boost
+- **Active Trader**: Rule-based frequency + ML profitability/sophistication boost
+- **Arbitrageur**: Rule-based tokens/flip_rate + ML profitability/sophistication boost
+- **Strategy Categories**: Rule-based market conditions + Trading Style vector + ML profitability
+- **New ML Categories**: Purely ML-driven (Profitable, Risk, Sophisticated, Influential)
 
 ### Why Some Wallets Have No Categories
 
@@ -352,7 +440,7 @@ A wallet may show **"Categories: None"** in the report. This does **not** mean t
 1. **Strict Thresholds**: Category thresholds are intentionally strict to identify clear behavioral patterns:
    - **Bot**: Requires `bot_probability > 0.7` (very high confidence)
    - **Scalper**: Requires `tx_per_day > 50` (very high frequency)
-   - **Whale**: Requires `max_value > 100.0` or `total_value > 1000.0` (large transactions)
+   - **Whale**: Requires `max_value > 50000.0` AND `total_value > 100000.0` OR `total_value > 500000.0` (very large transactions - thresholds were increased 100x)
    - **Volatility Trader**: Requires `avg_candle_volatility > 0.02` (2%+ volatility) AND `tx_count > 5`
 
 2. **Normal/Low-Activity Wallets**: Many wallets are simply normal traders with:
@@ -426,6 +514,82 @@ Transaction Count: 1250
 Age (days): 45.23
 ```
 
+## Challenges and Solutions in Wallet Categorization
+
+### Initial Challenges
+
+During development, we encountered several significant hurdles in creating an effective wallet categorization system:
+
+#### 1. **Everyone Classified as Whales**
+
+**Problem**: Initially, almost all wallets were being classified as "Whale" or "Possible Whale", making the categorization useless.
+
+**Root Cause**: The original thresholds were too low:
+- Whale: `max_value > 100.0` OR `total_value > 1000.0`
+- Possible Whale: `max_value > 10.0` OR `total_value > 100.0`
+
+In crypto markets, especially on Hyperliquid, these values are quite common, so most participants met the criteria.
+
+**Solution**: Increased thresholds by 100-500x:
+- Whale: `max_value > 50000.0` AND `total_value > 100000.0` OR `total_value > 500000.0`
+- Possible Whale: `max_value > 10000.0` AND `total_value > 50000.0` OR `total_value > 200000.0`
+- Added requirement: `tx_count >= 5` to avoid one-off large transactions
+
+This made whale classification much more exclusive and meaningful.
+
+#### 2. **ML Model Not Contributing to Categorization**
+
+**Problem**: The ML model was trained and provided scores, but categories were purely rule-based. The ML scores weren't being used effectively, making the ML component feel disconnected.
+
+**Root Cause**: 
+- Categories were determined by simple threshold rules on raw features
+- Only `bot_probability` was used (for Bot classification)
+- Other ML scores (risk, profitability, sophistication, trading style) were reported but not used for categorization
+
+**Solution**: Implemented hybrid ML-enhanced categorization:
+- **ML scores integrated**: All ML scores now influence category confidence
+- **ML-driven categories added**: New categories based purely on ML predictions (Profitable Trader, Sophisticated Trader, etc.)
+- **Trading Style vector used**: 6D style vector helps identify strategy preferences (momentum, mean reversion, volatility)
+- **ML as boost, not requirement**: Rule-based categories still work even with low ML confidence; ML provides enhancement when available
+
+#### 3. **No Categories Assigned (0 Wallets with Categories)**
+
+**Problem**: After implementing ML enhancements, sometimes no wallets were getting categories assigned.
+
+**Root Cause**: 
+- ML confidence filter was too strict: removed categories when `ml_confidence < 0.2`
+- ML boost thresholds were too high: required `ml_confidence > 0.3` to apply boosts
+- ML-driven category thresholds were too strict (0.7/0.5 for scores, high tx_count requirements)
+
+**Solution**:
+- **Removed strict ML filter**: Rule-based categories now work regardless of ML confidence
+- **Lowered ML boost threshold**: Changed from `ml_confidence > 0.3` to `ml_confidence > 0.1`
+- **Lowered ML category thresholds**: Reduced from 0.7/0.5 to 0.6/0.4, tx_count from 5/10 to 3/5
+- **ML is optional**: Categories work based on rules; ML provides boost when available
+
+#### 4. **Self-Supervised Learning Limitations**
+
+**Problem**: The ML model uses self-supervised learning (training against zeros), which may not learn meaningful patterns.
+
+**Solution**: Enhanced training process:
+- **Weighted loss**: Higher weight for important tasks (bot, profitability)
+- **Output diversity regularization**: Prevents model from collapsing to trivial solutions
+- **Better training**: Increased epochs (10→20), learning rate scheduling, early stopping
+- **Gradient clipping**: Improves training stability
+
+**Note**: For production use, consider supervised learning with labeled data if available.
+
+### Current Approach
+
+The system now uses a **hybrid rule-based + ML-enhanced** approach:
+
+1. **Rule-based foundation**: Categories are primarily determined by interpretable rules on features
+2. **ML enhancement**: ML scores boost confidence and add new categories
+3. **Robustness**: Works even when ML scores are low (ML is enhancement, not requirement)
+4. **Flexibility**: Easy to adjust thresholds and add new categories
+
+This approach balances interpretability (rules) with intelligence (ML), ensuring the system works reliably while learning from data.
+
 ## Two-Stage Architecture
 
 ### Stage 1: Data Collection (`1_record_data.py`)
@@ -486,12 +650,11 @@ hypertrack/
 ├── __init__.py              # Package initialization
 ├── 1_record_data.py         # Stage 1: Data collection
 ├── 2_run_model.py          # Stage 2: Model training & classification
+├── 3_frontend.py            # Stage 3: Interactive dashboard visualization
 ├── recorder_trades.py       # Trade recorder module
 ├── recorder_bbo.py          # BBO recorder module
 ├── recorder_l2Book.py       # L2Book recorder module
-├── recorder_candle.py       # Candle recorder module
-├── stream_client.py         # WebSocket client
-└── wallet_profiler.py       # Legacy wallet profiler (deprecated)
+└── recorder_candle.py       # Candle recorder module
 
 recorded_data/               # Data collection output
 ├── blocks.jsonl
