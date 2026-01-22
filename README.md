@@ -3,22 +3,24 @@
 <table style="border: none; border-collapse: collapse; width: 100%;">
 <tr>
 <td style="width: 50%; vertical-align: top; padding-right: 20px; border: none;">
-<p>A Python package for tracking Hyperliquid trading activity, recording market data, and using machine learning to detect and classify profitable traders using real-time data streams.</p>
 
-<h2>Overview</h2>
+A Python package for tracking Hyperliquid trading activity, recording market data, and using machine learning to detect and classify profitable traders using real-time data streams.
 
-<p>This system consists of three main stages:</p>
+## Overview
 
-<ol>
-<li><strong>Data Collection (`1_record_data.py`)</strong>: Subscribes to blockchain events and Hyperliquid public API streams to record trading data</li>
-<li><strong>Model Training & Classification (`2_run_model.py`)</strong>: Uses PyTorch multi-task learning to analyze wallets and classify trader behavior</li>
-<li><strong>Visualization (`3_frontend.py`)</strong>: Generates an interactive HTML dashboard to visualize wallet profiling results</li>
-</ol>
+This system consists of three main stages:
 
-<p>The system monitors trading activity on Hyperliquid (a decentralized exchange on its own L1 blockchain) by subscribing to trading events and recording them in a parseable, human-readable format. The recorded data is designed for machine learning tasks related to profitable trader detection and wallet classification.</p>
+1. **Data Collection (`1_record_data.py`)**: Subscribes to blockchain events and Hyperliquid public API streams to record trading data
+2. **Model Training & Classification (`2_run_model.py`)**: Uses PyTorch multi-task learning to analyze wallets and classify trader behavior
+3. **Visualization (`3_frontend.py`)**: Generates an interactive HTML dashboard to visualize wallet profiling results
+
+The system monitors trading activity on Hyperliquid (a decentralized exchange on its own L1 blockchain) by subscribing to trading events and recording them in a parseable, human-readable format. The recorded data is designed for machine learning tasks related to profitable trader detection and wallet classification.
+
 </td>
 <td style="width: 50%; vertical-align: top; border: none;">
-<img src="paper.png" alt="paper" style="width: 100%; max-width: 100%;">
+
+![paper](paper.png)
+
 </td>
 </tr>
 </table>
