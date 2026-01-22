@@ -1,8 +1,6 @@
-# Hyperliquid Copy Trader - Wallet Profiling System
+<img src="paper.png" alt="paper" style="float: right; width: 50%; max-width: 500px; margin-left: 20px; margin-bottom: 20px;">
 
-<table style="border: none; border-collapse: collapse; width: 100%;">
-<tr>
-<td style="width: 50%; vertical-align: top; padding-right: 20px; border: none;">
+# Hyperliquid Copy Trader - Wallet Profiling System
 
 A Python package for tracking Hyperliquid trading activity, recording market data, and using machine learning to detect and classify profitable traders using real-time data streams.
 
@@ -15,15 +13,6 @@ This system consists of three main stages:
 3. **Visualization (`3_frontend.py`)**: Generates an interactive HTML dashboard to visualize wallet profiling results
 
 The system monitors trading activity on Hyperliquid (a decentralized exchange on its own L1 blockchain) by subscribing to trading events and recording them in a parseable, human-readable format. The recorded data is designed for machine learning tasks related to profitable trader detection and wallet classification.
-
-</td>
-<td style="width: 50%; vertical-align: top; border: none;">
-
-![paper](paper.png)
-
-</td>
-</tr>
-</table>
 
 ## Why WebSocket Streams vs Blockchain Events?
 
