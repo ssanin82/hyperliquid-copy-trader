@@ -24,11 +24,551 @@ TRANSACTIONS_FILE = os.path.join(DATA_DIR, "transactions.jsonl")
 TRADES_FILE = os.path.join(DATA_DIR, "trades.jsonl")
 BBO_FILE = os.path.join(DATA_DIR, "bbo.jsonl")
 L2BOOK_FILE = os.path.join(DATA_DIR, "l2book.jsonl")
+CANDLES_FILE = os.path.join(DATA_DIR, "candles.jsonl")
 MODEL_FILE = "wallet_model.pt"
 FINAL_REPORT_FILE = "final_report.txt"
+TX_COUNT_THRESHOLD = 5
+SHOW_NO_CATEGORIES = False
 
 # ERC-20 Transfer event signature
 ERC20_TRANSFER_SIG = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+# Forward declarations for type hints
+if False:
+    from typing import TYPE_CHECKING
+    if TYPE_CHECKING:
+        WalletFeatures = None
+        WalletMTLModel = None
+        WalletDataset = None
+
+
+class WalletFeatures:
+    """Tracks features for a single wallet."""
+    
+    def __init__(self, address: str):
+        self.address = address.lower()
+        self.first_seen = time.time()
+        self.last_seen = time.time()
+        
+        # Transaction features
+        self.transactions = []
+        self.transaction_times = []
+        self.transaction_values = []
+        
+        # ERC-20 transfer features
+        self.erc20_transfers = []
+        self.tokens_traded = set()
+        self.total_volume = 0.0
+        
+        # Temporal features
+        self.active_hours = set()
+        self.session_starts = []
+        
+        # Directional features
+        self.long_count = 0
+        self.short_count = 0
+        self.direction_changes = 0
+        self.last_direction = None
+        
+        # Size features
+        self.trade_sizes = []
+        
+        # Risk features
+        self.leverage_used = []
+        self.margin_changes = []
+        
+        # Network features
+        self.interacted_addresses = set()
+        self.contract_interactions = set()
+        
+        # Market data features
+        self.trades_with_market_data = []
+        self.market_impact_scores = []
+        self.slippage_scores = []
+        self.momentum_scores = []
+        self.mean_reversion_scores = []
+        self.volatility_scores = []
+        self.market_maker_scores = []
+        self.order_book_participation = []
+        
+        # Candle-based features (NEW)
+        self.candle_contexts = []  # List of (timestamp, candle_data) tuples
+        self.candle_volatilities = []  # Volatility during active periods
+        self.candle_momentums = []  # Price momentum during active periods
+        self.candle_trends = []  # Trend strength during active periods
+        self.candle_volumes = []  # Volume patterns during active periods
+    
+    def add_transaction(self, tx_data: Dict[str, Any], timestamp: float):
+        """Add a transaction to wallet history."""
+        self.transactions.append(tx_data)
+        self.transaction_times.append(timestamp)
+        self.last_seen = timestamp
+        
+        # Extract value if available
+        value = tx_data.get("value", "0x0")
+        if isinstance(value, str):
+            try:
+                value_wei = int(value, 16)
+                value_eth = value_wei / 1e18
+                self.transaction_values.append(value_eth)
+            except:
+                pass
+        
+        # Track active hours
+        dt = datetime.fromtimestamp(timestamp, UTC)
+        self.active_hours.add(dt.hour)
+        
+        # Track interactions
+        tx_from = (tx_data.get("from") or "").lower()
+        tx_to = (tx_data.get("to") or "").lower()
+        if tx_from == self.address and tx_to:
+            self.interacted_addresses.add(tx_to)
+        elif tx_to == self.address and tx_from:
+            self.interacted_addresses.add(tx_from)
+    
+    def add_erc20_transfer(self, transfer_data: Dict[str, Any], timestamp: float):
+        """Add an ERC-20 transfer."""
+        self.erc20_transfers.append(transfer_data)
+        token_address = (transfer_data.get("address") or "").lower()
+        if token_address:
+            self.tokens_traded.add(token_address)
+        
+        # Extract value
+        value_data = transfer_data.get("value", "0x0")
+        if isinstance(value_data, str):
+            try:
+                value = int(value_data, 16)
+                self.total_volume += value
+            except:
+                pass
+    
+    def add_candle_context(self, timestamp: float, candle_data: Dict[str, Any]):
+        """Add candle context for a transaction timestamp."""
+        self.candle_contexts.append((timestamp, candle_data))
+    
+    def extract_features(self) -> Dict[str, float]:
+        """Extract ML features from wallet history."""
+        features = {}
+        
+        # Basic counts
+        features['tx_count'] = len(self.transactions)
+        features['erc20_count'] = len(self.erc20_transfers)
+        features['unique_tokens'] = len(self.tokens_traded)
+        features['unique_addresses'] = len(self.interacted_addresses)
+        
+        # Temporal features
+        if self.transaction_times:
+            features['age_days'] = (self.last_seen - self.first_seen) / 86400
+            features['tx_per_day'] = features['tx_count'] / max(features['age_days'], 0.01)
+            
+            # Burstiness
+            if len(self.transaction_times) > 1:
+                sorted_times = sorted(self.transaction_times)
+                inter_times = [sorted_times[i+1] - sorted_times[i] 
+                              for i in range(len(sorted_times) - 1)]
+                if inter_times:
+                    mean_inter = statistics.mean(inter_times)
+                    if mean_inter > 0:
+                        std_inter = statistics.stdev(inter_times) if len(inter_times) > 1 else 0.0
+                        features['burstiness'] = std_inter / mean_inter
+                    else:
+                        features['burstiness'] = 0.0
+                else:
+                    features['burstiness'] = 0.0
+            else:
+                features['burstiness'] = 0.0
+            
+            # Active hours entropy
+            if self.transaction_times:
+                hour_counts = [0] * 24
+                for tx_time in self.transaction_times:
+                    dt = datetime.fromtimestamp(tx_time, UTC)
+                    hour_counts[dt.hour] += 1
+                total = sum(hour_counts)
+                if total > 0:
+                    entropy = -sum((c/total) * math.log2(c/total) 
+                                  for c in hour_counts if c > 0)
+                    features['hour_entropy'] = entropy / math.log2(24) if math.log2(24) > 0 else 0.0
+                else:
+                    features['hour_entropy'] = 0.0
+            else:
+                features['hour_entropy'] = 0.0
+        else:
+            features['age_days'] = 0.0
+            features['tx_per_day'] = 0.0
+            features['burstiness'] = 0.0
+            features['hour_entropy'] = 0.0
+        
+        # Value features
+        if self.transaction_values:
+            features['total_value'] = sum(self.transaction_values)
+            features['avg_value'] = statistics.mean(self.transaction_values)
+            features['max_value'] = max(self.transaction_values)
+            features['value_std'] = statistics.stdev(self.transaction_values) if len(self.transaction_values) > 1 else 0.0
+        else:
+            features['total_value'] = 0.0
+            features['avg_value'] = 0.0
+            features['max_value'] = 0.0
+            features['value_std'] = 0.0
+        
+        # ERC-20 features
+        features['erc20_volume'] = self.total_volume
+        features['token_diversity'] = len(self.tokens_traded)
+        
+        # Directional features
+        total_directional = self.long_count + self.short_count
+        if total_directional > 0:
+            features['long_ratio'] = self.long_count / total_directional
+            features['flip_rate'] = self.direction_changes / total_directional
+        else:
+            features['long_ratio'] = 0.5
+            features['flip_rate'] = 0.0
+        
+        # Size entropy
+        if self.trade_sizes:
+            if len(self.trade_sizes) > 1:
+                min_size = min(self.trade_sizes)
+                max_size = max(self.trade_sizes)
+                if max_size > min_size:
+                    bins = 10
+                    bin_counts = [0] * bins
+                    bin_size = (max_size - min_size) / bins
+                    for s in self.trade_sizes:
+                        bin_idx = min(int((s - min_size) / bin_size), bins - 1)
+                        bin_counts[bin_idx] += 1
+                    total = len(self.trade_sizes)
+                    entropy = -sum((c/total) * math.log2(c/total) 
+                                  for c in bin_counts if c > 0)
+                    features['size_entropy'] = entropy / math.log2(bins) if math.log2(bins) > 0 else 0.0
+                else:
+                    features['size_entropy'] = 0.0
+            else:
+                features['size_entropy'] = 0.0
+        else:
+            features['size_entropy'] = 1.0
+        
+        # Network features
+        features['contract_interaction_count'] = len(self.contract_interactions)
+        features['address_diversity'] = len(self.interacted_addresses)
+        
+        # Market data features
+        if self.market_impact_scores:
+            features['avg_market_impact'] = statistics.mean(self.market_impact_scores)
+            features['max_market_impact'] = max(self.market_impact_scores)
+        else:
+            features['avg_market_impact'] = 0.0
+            features['max_market_impact'] = 0.0
+        
+        if self.slippage_scores:
+            features['avg_slippage'] = statistics.mean(self.slippage_scores)
+            features['slippage_std'] = statistics.stdev(self.slippage_scores) if len(self.slippage_scores) > 1 else 0.0
+        else:
+            features['avg_slippage'] = 0.0
+            features['slippage_std'] = 0.0
+        
+        if self.momentum_scores:
+            features['momentum_score'] = statistics.mean(self.momentum_scores)
+        else:
+            features['momentum_score'] = 0.0
+        
+        if self.mean_reversion_scores:
+            features['mean_reversion_score'] = statistics.mean(self.mean_reversion_scores)
+        else:
+            features['mean_reversion_score'] = 0.0
+        
+        if self.volatility_scores:
+            features['volatility_trading_score'] = statistics.mean(self.volatility_scores)
+        else:
+            features['volatility_trading_score'] = 0.0
+        
+        if self.market_maker_scores:
+            features['market_maker_score'] = statistics.mean(self.market_maker_scores)
+        else:
+            features['market_maker_score'] = 0.0
+        
+        if self.order_book_participation:
+            features['order_book_participation'] = statistics.mean(self.order_book_participation)
+        else:
+            features['order_book_participation'] = 0.0
+        
+        # CANDLE-BASED FEATURES (NEW)
+        if self.candle_contexts:
+            # Extract candle metrics
+            volatilities = []
+            momentums = []
+            trends = []
+            volumes = []
+            
+            for _, candle in self.candle_contexts:
+                try:
+                    o = float(candle.get('o', 0))
+                    h = float(candle.get('h', 0))
+                    l = float(candle.get('l', 0))
+                    c = float(candle.get('c', 0))
+                    v = float(candle.get('v', 0))
+                    
+                    if o > 0:
+                        # Volatility: (high - low) / open (normalized range)
+                        volatility = (h - l) / o if o > 0 else 0.0
+                        volatilities.append(volatility)
+                        
+                        # Momentum: (close - open) / open (price change)
+                        momentum = (c - o) / o if o > 0 else 0.0
+                        momentums.append(momentum)
+                        
+                        # Trend strength: |close - open| / (high - low) (how much of the range was used)
+                        range_size = h - l if h > l else 1.0
+                        trend = abs(c - o) / range_size if range_size > 0 else 0.0
+                        trends.append(trend)
+                        
+                        # Volume (normalized)
+                        volumes.append(v)
+                except (ValueError, TypeError):
+                    continue
+            
+            # Aggregate candle features
+            if volatilities:
+                features['avg_candle_volatility'] = statistics.mean(volatilities)
+                features['max_candle_volatility'] = max(volatilities)
+                features['volatility_std'] = statistics.stdev(volatilities) if len(volatilities) > 1 else 0.0
+            else:
+                features['avg_candle_volatility'] = 0.0
+                features['max_candle_volatility'] = 0.0
+                features['volatility_std'] = 0.0
+            
+            if momentums:
+                features['avg_candle_momentum'] = statistics.mean(momentums)
+                features['momentum_std'] = statistics.stdev(momentums) if len(momentums) > 1 else 0.0
+                # Positive momentum ratio (how often price went up)
+                positive_momentum = sum(1 for m in momentums if m > 0)
+                features['positive_momentum_ratio'] = positive_momentum / len(momentums)
+            else:
+                features['avg_candle_momentum'] = 0.0
+                features['momentum_std'] = 0.0
+                features['positive_momentum_ratio'] = 0.5
+            
+            if trends:
+                features['avg_trend_strength'] = statistics.mean(trends)
+            else:
+                features['avg_trend_strength'] = 0.0
+            
+            if volumes:
+                features['avg_candle_volume'] = statistics.mean(volumes)
+                features['max_candle_volume'] = max(volumes)
+                features['volume_std'] = statistics.stdev(volumes) if len(volumes) > 1 else 0.0
+            else:
+                features['avg_candle_volume'] = 0.0
+                features['max_candle_volume'] = 0.0
+                features['volume_std'] = 0.0
+        else:
+            # No candle context
+            features['avg_candle_volatility'] = 0.0
+            features['max_candle_volatility'] = 0.0
+            features['volatility_std'] = 0.0
+            features['avg_candle_momentum'] = 0.0
+            features['momentum_std'] = 0.0
+            features['positive_momentum_ratio'] = 0.5
+            features['avg_trend_strength'] = 0.0
+            features['avg_candle_volume'] = 0.0
+            features['max_candle_volume'] = 0.0
+            features['volume_std'] = 0.0
+        
+        return features
+    
+    def classify_wallet(self, features: Dict[str, float], bot_probability: float = 0.0) -> List[tuple]:
+        """Classify wallet into behavior categories."""
+        categories = []
+        
+        tx_per_day = features.get('tx_per_day', 0.0)
+        size_entropy = features.get('size_entropy', 1.0)
+        burstiness = features.get('burstiness', 0.0)
+        age_days = features.get('age_days', 0.0)
+        tx_count = features.get('tx_count', 0.0)
+        max_value = features.get('max_value', 0.0)
+        total_value = features.get('total_value', 0.0)
+        avg_value = features.get('avg_value', 0.0)
+        unique_tokens = features.get('unique_tokens', 0.0)
+        erc20_count = features.get('erc20_count', 0.0)
+        flip_rate = features.get('flip_rate', 0.0)
+        
+        # Candle-based features
+        avg_volatility = features.get('avg_candle_volatility', 0.0)
+        avg_momentum = features.get('avg_candle_momentum', 0.0)
+        positive_momentum_ratio = features.get('positive_momentum_ratio', 0.5)
+        avg_trend_strength = features.get('avg_trend_strength', 0.0)
+        avg_volume = features.get('avg_candle_volume', 0.0)
+        
+        # Bot classification
+        if bot_probability > 0.7:
+            categories.append(("Bot", bot_probability))
+        elif bot_probability > 0.5:
+            categories.append(("Possible Bot", bot_probability))
+        
+        # Scalper: High frequency, small sizes, high burstiness
+        if tx_per_day > 50 and size_entropy < 0.4:
+            confidence = min(1.0, (tx_per_day / 100.0) * (1.0 - size_entropy))
+            categories.append(("Scalper", confidence))
+        elif tx_per_day > 30 and size_entropy < 0.5:
+            categories.append(("Possible Scalper", 0.6))
+        
+        # HODLer: Very low frequency, old wallet
+        if tx_per_day < 0.1 and age_days > 30:
+            confidence = min(1.0, (30.0 / max(age_days, 1.0)) * (0.1 / max(tx_per_day, 0.01)))
+            categories.append(("HODLer", confidence))
+        elif tx_per_day < 0.5 and age_days > 60:
+            categories.append(("Possible HODLer", 0.6))
+        
+        # Whale: Large transaction values
+        if max_value > 100.0 or total_value > 1000.0:
+            confidence = min(1.0, (max_value / 1000.0) if max_value > 0 else (total_value / 10000.0))
+            categories.append(("Whale", min(1.0, confidence)))
+        elif max_value > 10.0 or total_value > 100.0:
+            categories.append(("Possible Whale", 0.6))
+        
+        # Token Collector: High ERC-20 activity, many tokens
+        if unique_tokens > 10 and erc20_count > tx_count * 2:
+            confidence = min(1.0, (unique_tokens / 50.0) * (erc20_count / max(tx_count * 3, 1.0)))
+            categories.append(("Token Collector", confidence))
+        elif unique_tokens > 5 and erc20_count > tx_count:
+            categories.append(("Possible Token Collector", 0.6))
+        
+        # Active Trader: Moderate-high frequency
+        if 1.0 <= tx_per_day <= 50 and burstiness > 0.3:
+            confidence = min(1.0, tx_per_day / 50.0)
+            categories.append(("Active Trader", confidence))
+        elif 0.5 <= tx_per_day <= 30:
+            categories.append(("Moderate Trader", 0.6))
+        
+        # Arbitrageur: Multiple tokens, high flip rate
+        if unique_tokens > 5 and flip_rate > 0.5:
+            confidence = min(1.0, (unique_tokens / 20.0) * flip_rate)
+            categories.append(("Arbitrageur", confidence))
+        elif unique_tokens > 3 and flip_rate > 0.3:
+            categories.append(("Possible Arbitrageur", 0.6))
+        
+        # NEW: Volatility Trader - Trades during high volatility periods
+        if avg_volatility > 0.02 and tx_count > 5:  # 2%+ volatility
+            confidence = min(1.0, (avg_volatility / 0.05) * (tx_count / 20.0))
+            categories.append(("Volatility Trader", confidence))
+        elif avg_volatility > 0.01:
+            categories.append(("Possible Volatility Trader", 0.6))
+        
+        # NEW: Momentum Follower - Trades when momentum is positive
+        if positive_momentum_ratio > 0.7 and avg_momentum > 0.001 and tx_count > 5:
+            confidence = min(1.0, positive_momentum_ratio * (avg_momentum / 0.01))
+            categories.append(("Momentum Follower", confidence))
+        elif positive_momentum_ratio > 0.6:
+            categories.append(("Possible Momentum Follower", 0.6))
+        
+        # NEW: Contrarian Trader - Trades when momentum is negative (mean reversion)
+        if positive_momentum_ratio < 0.3 and avg_momentum < -0.001 and tx_count > 5:
+            confidence = min(1.0, (1.0 - positive_momentum_ratio) * (abs(avg_momentum) / 0.01))
+            categories.append(("Contrarian Trader", confidence))
+        elif positive_momentum_ratio < 0.4:
+            categories.append(("Possible Contrarian Trader", 0.6))
+        
+        # NEW: High Volume Trader - Trades during high volume periods
+        if avg_volume > 100.0 and tx_count > 5:  # Adjust threshold based on data
+            confidence = min(1.0, (avg_volume / 500.0) * (tx_count / 20.0))
+            categories.append(("High Volume Trader", confidence))
+        
+        # Sort by confidence (highest first)
+        categories.sort(key=lambda x: x[1], reverse=True)
+        
+        return categories
+
+
+class WalletMTLModel(nn.Module):
+    """Multi-Task Learning model for wallet profiling."""
+    
+    def __init__(self, input_dim: int = 20, hidden_dim: int = 256):
+        super(WalletMTLModel, self).__init__()
+        
+        # Shared encoder
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.BatchNorm1d(hidden_dim // 2),
+            nn.ReLU(),
+        )
+        
+        # Task-specific heads
+        self.style_head = nn.Sequential(
+            nn.Linear(hidden_dim // 2, 128),
+            nn.ReLU(),
+            nn.Linear(128, 6),  # 6D style vector
+            nn.Tanh()
+        )
+        
+        self.risk_head = nn.Sequential(
+            nn.Linear(hidden_dim // 2, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+        
+        self.profitability_head = nn.Sequential(
+            nn.Linear(hidden_dim // 2, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+        
+        self.bot_head = nn.Sequential(
+            nn.Linear(hidden_dim // 2, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+        
+        self.influence_head = nn.Sequential(
+            nn.Linear(hidden_dim // 2, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.ReLU()
+        )
+        
+        self.sophistication_head = nn.Sequential(
+            nn.Linear(hidden_dim // 2, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x):
+        shared = self.encoder(x)
+        return {
+            'style': self.style_head(shared),
+            'risk': self.risk_head(shared),
+            'profitability': self.profitability_head(shared),
+            'bot': self.bot_head(shared),
+            'influence': self.influence_head(shared),
+            'sophistication': self.sophistication_head(shared)
+        }
+
+
+class WalletDataset(Dataset):
+    """Dataset for wallet features."""
+    
+    def __init__(self, features_list: List[np.ndarray], labels: Optional[Dict[str, List]] = None):
+        self.features = torch.FloatTensor(features_list)
+        self.labels = labels
+    
+    def __len__(self):
+        return len(self.features)
+    
+    def __getitem__(self, idx):
+        item = {'features': self.features[idx]}
+        if self.labels:
+            item.update({k: torch.FloatTensor(v[idx]) for k, v in self.labels.items()})
+        return item
 
 
 class ModelRunner:
@@ -41,7 +581,7 @@ class ModelRunner:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # Wallet tracking
-        self.wallets: Dict[str, WalletFeatures] = {}
+        self.wallets: Dict[str, 'WalletFeatures'] = {}
         
         # Model
         self.model = None
@@ -53,7 +593,11 @@ class ModelRunner:
             'size_entropy', 'contract_interaction_count', 'address_diversity',
             'avg_market_impact', 'max_market_impact', 'avg_slippage', 'slippage_std',
             'momentum_score', 'mean_reversion_score', 'volatility_trading_score',
-            'market_maker_score', 'order_book_participation'
+            'market_maker_score', 'order_book_participation',
+            # NEW: Candle-based features
+            'avg_candle_volatility', 'max_candle_volatility', 'volatility_std',
+            'avg_candle_momentum', 'momentum_std', 'positive_momentum_ratio',
+            'avg_trend_strength', 'avg_candle_volume', 'max_candle_volume', 'volume_std'
         ]
         
         # Feature normalization
@@ -64,8 +608,12 @@ class ModelRunner:
         self.market_data = {
             'trades': [],
             'bbo': {},
-            'l2_book': {}
+            'l2_book': {},
+            'candles': []  # NEW: Store candles indexed by timestamp
         }
+        
+        # Candle index: (coin, timestamp_ms) -> candle_data
+        self.candle_index: Dict[tuple, Dict[str, Any]] = {}
     
     def _load_jsonl(self, filepath: str) -> List[Dict[str, Any]]:
         """Load JSON Lines file."""
@@ -98,11 +646,17 @@ class ModelRunner:
             if tx_from not in self.wallets:
                 self.wallets[tx_from] = WalletFeatures(tx_from)
             self.wallets[tx_from].add_transaction(tx, block_timestamp)
+            
+            # Match candle to transaction timestamp
+            self._match_candle_to_transaction(tx_from, block_timestamp)
         
         if tx_to:
             if tx_to not in self.wallets:
                 self.wallets[tx_to] = WalletFeatures(tx_to)
             self.wallets[tx_to].add_transaction(tx, block_timestamp)
+            
+            # Match candle to transaction timestamp
+            self._match_candle_to_transaction(tx_to, block_timestamp)
         
         # Process ERC-20 transfers from logs
         receipt = tx.get("receipt", {})
@@ -120,12 +674,40 @@ class ModelRunner:
                         if from_addr not in self.wallets:
                             self.wallets[from_addr] = WalletFeatures(from_addr)
                         self.wallets[from_addr].add_erc20_transfer(log, block_timestamp)
+                        self._match_candle_to_transaction(from_addr, block_timestamp)
                     
                     if to_addr:
                         to_addr = to_addr.lower()
                         if to_addr not in self.wallets:
                             self.wallets[to_addr] = WalletFeatures(to_addr)
                         self.wallets[to_addr].add_erc20_transfer(log, block_timestamp)
+                        self._match_candle_to_transaction(to_addr, block_timestamp)
+    
+    def _match_candle_to_transaction(self, address: str, tx_timestamp: float):
+        """Match the closest candle to a transaction timestamp."""
+        if not self.candle_index:
+            return
+        
+        # Convert transaction timestamp to milliseconds
+        tx_timestamp_ms = int(tx_timestamp * 1000)
+        
+        # Find the closest candle (candle.t is the open time in ms)
+        best_candle = None
+        best_diff = float('inf')
+        
+        for (coin, candle_t), candle_data in self.candle_index.items():
+            # Check if transaction is within candle period (t to T)
+            candle_T = candle_data.get('T', candle_t + 60000)  # Default 1 minute if T missing
+            if candle_t <= tx_timestamp_ms <= candle_T:
+                # Transaction is within this candle period
+                diff = abs(tx_timestamp_ms - candle_t)
+                if diff < best_diff:
+                    best_diff = diff
+                    best_candle = candle_data
+        
+        if best_candle:
+            wallet = self.wallets[address]
+            wallet.add_candle_context(tx_timestamp, best_candle)
     
     def _load_data(self):
         """Load all recorded data."""
@@ -136,6 +718,19 @@ class ModelRunner:
         transactions = self._load_jsonl(TRANSACTIONS_FILE)
         
         print(f"Loaded {len(blocks)} blocks, {len(transactions)} transactions")
+        
+        # Load candles FIRST to build index
+        candles = self._load_jsonl(CANDLES_FILE)
+        print(f"Loaded {len(candles)} candles")
+        
+        # Index candles by (coin, timestamp)
+        for candle in candles:
+            coin = candle.get('s', candle.get('coin', '')).upper()
+            candle_t = candle.get('t')  # Open time in milliseconds
+            if coin and candle_t:
+                self.candle_index[(coin, candle_t)] = candle
+        
+        print(f"Indexed {len(self.candle_index)} candles")
         
         # Process transactions
         for tx in transactions:
@@ -305,6 +900,11 @@ class ModelRunner:
         for i, addr in enumerate(wallet_addresses):
             wallet = self.wallets[addr]
             features = wallet.extract_features()
+            tx_count = features.get('tx_count', 0)
+            
+            # Filter by transaction count threshold
+            if tx_count < TX_COUNT_THRESHOLD:
+                continue
             
             result = {
                 'address': addr,
@@ -314,8 +914,7 @@ class ModelRunner:
                 'bot_probability': float(combined_outputs['bot'][i]),
                 'influence_score': float(combined_outputs['influence'][i]),
                 'sophistication_score': float(combined_outputs['sophistication'][i]),
-                'tx_count': features.get('tx_count', 0),
-                'age_days': features.get('age_days', 0.0)
+                'tx_count': tx_count
             }
             
             # Classify wallet
@@ -330,25 +929,36 @@ class ModelRunner:
         """Generate final report."""
         print("Generating final report...")
         
+        # Filter results if SHOW_NO_CATEGORIES is False
+        filtered_results = results
+        if not SHOW_NO_CATEGORIES:
+            filtered_results = [r for r in results if r.get('categories', [])]
+        
         with open(FINAL_REPORT_FILE, 'w') as f:
             f.write("=" * 80 + "\n")
             f.write("WALLET PROFILING REPORT\n")
             f.write("=" * 80 + "\n")
             f.write(f"Generated: {datetime.now(UTC).isoformat().replace('+00:00', 'Z')}\n")
-            f.write(f"Total wallets analyzed: {len(results)}\n\n")
+            f.write(f"Total wallets analyzed: {len(results)}\n")
+            if not SHOW_NO_CATEGORIES:
+                f.write(f"Wallets with categories: {len(filtered_results)}\n")
+            f.write("\n")
             
             f.write("=" * 80 + "\n\n")
             
-            for i, result in enumerate(results, 1):
+            for i, result in enumerate(filtered_results, 1):
                 f.write(f"Wallet #{i}: {result['address']}\n")
                 f.write("-" * 80 + "\n")
                 
-                # Categories
+                # Categories - ALWAYS SHOW (priority)
                 categories = result.get('categories', [])
                 if categories:
                     f.write("Categories: ")
-                    f.write(", ".join([f"{cat} ({conf:.2f})" for cat, conf in categories[:3]]))
+                    # Show all categories, not just top 3
+                    f.write(", ".join([f"{cat} ({conf:.2f})" for cat, conf in categories]))
                     f.write("\n\n")
+                else:
+                    f.write("Categories: None\n\n")
                 
                 # ML Metrics
                 f.write(f"Trading Style Score (6D vector): {[f'{x:.4f}' for x in result['style_score']]}\n")
@@ -361,7 +971,6 @@ class ModelRunner:
                 
                 # Stats
                 f.write(f"Transaction Count: {int(result['tx_count'])}\n")
-                f.write(f"Age (days): {result['age_days']:.2f}\n")
                 f.write("\n")
         
         print(f"Final report saved to: {FINAL_REPORT_FILE}")
