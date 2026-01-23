@@ -1,0 +1,152 @@
+================================================================================
+WALLET PROFILING REPORT
+================================================================================
+Generated: 2026-01-23T05:43:06.835809Z
+Total wallets analyzed: 4349
+Wallets with categories: 11
+
+================================================================================
+
+Wallet #1: 0x8549fd7ffc092f8366e416e129a622ec060104ea
+--------------------------------------------------------------------------------
+Categories: Influential Trader (0.10)
+
+Trading Style Score (6D vector): ['-0.5309', '-0.5637', '0.7413', '0.4937', '-0.6759', '-0.5891']
+Risk Score: 0.0002
+Profitability Score: 0.0000
+Bot Probability: 0.0000
+Influence Score: 7.3117
+Sophistication Score: 0.0001
+
+Transaction Count: 5714
+
+Wallet #2: 0xb1b1f07127254d76b89c8f4f887dfcd6e1eeb463
+--------------------------------------------------------------------------------
+Categories: Possibly Influential Trader (0.07)
+
+Trading Style Score (6D vector): ['-0.1991', '-0.2075', '0.2941', '0.1835', '-0.2658', '-0.2166']
+Risk Score: 0.0413
+Profitability Score: 0.0013
+Bot Probability: 0.0002
+Influence Score: 2.4403
+Sophistication Score: 0.0364
+
+Transaction Count: 1870
+
+Wallet #3: 0xc1ca9ccbaff7368d0353dc3703d6f08ca52cd0e2
+--------------------------------------------------------------------------------
+Categories: Possibly Influential Trader (0.07)
+
+Trading Style Score (6D vector): ['-0.1991', '-0.2075', '0.2941', '0.1835', '-0.2658', '-0.2166']
+Risk Score: 0.0413
+Profitability Score: 0.0013
+Bot Probability: 0.0002
+Influence Score: 2.4403
+Sophistication Score: 0.0364
+
+Transaction Count: 1870
+
+Wallet #4: 0x42fa34caf53e79fcef0d147da7e1c31123fede21
+--------------------------------------------------------------------------------
+Categories: Possibly Influential Trader (0.05)
+
+Trading Style Score (6D vector): ['-0.1338', '-0.1359', '0.1888', '0.1237', '-0.1759', '-0.1406']
+Risk Score: 0.0984
+Profitability Score: 0.0101
+Bot Probability: 0.0032
+Influence Score: 1.6055
+Sophistication Score: 0.0936
+
+Transaction Count: 1254
+
+Wallet #5: 0xbb146d6521d29651519c61bb430474f0a210ff1d
+--------------------------------------------------------------------------------
+Categories: Possibly Influential Trader (0.04)
+
+Trading Style Score (6D vector): ['-0.1168', '-0.1173', '0.1606', '0.1083', '-0.1520', '-0.1207']
+Risk Score: 0.1213
+Profitability Score: 0.0170
+Bot Probability: 0.0067
+Influence Score: 1.3783
+Sophistication Score: 0.1162
+
+Transaction Count: 1024
+
+Wallet #6: 0xc38e4e6a15593f908255214653d3d947ca1c2338
+--------------------------------------------------------------------------------
+Categories: Possibly Influential Trader (0.04)
+
+Trading Style Score (6D vector): ['-0.1240', '-0.1252', '0.1726', '0.1148', '-0.1622', '-0.1291']
+Risk Score: 0.1109
+Profitability Score: 0.0136
+Bot Probability: 0.0049
+Influence Score: 1.4757
+Sophistication Score: 0.1060
+
+Transaction Count: 1101
+
+Wallet #7: 0x4805c54b2776dd347fb712fee92035edb6232f45
+--------------------------------------------------------------------------------
+Categories: Possibly Influential Trader (0.04)
+
+Trading Style Score (6D vector): ['-0.1118', '-0.1118', '0.1525', '0.1036', '-0.1451', '-0.1148']
+Risk Score: 0.1289
+Profitability Score: 0.0197
+Bot Probability: 0.0082
+Influence Score: 1.3242
+Sophistication Score: 0.1241
+
+Transaction Count: 1063
+
+Wallet #8: 0x2222222222222222222222222222222222222222
+--------------------------------------------------------------------------------
+Categories: Possible Whale (0.11)
+
+Trading Style Score (6D vector): ['-0.0438', '-0.0384', '0.0364', '0.0425', '-0.0448', '-0.0370']
+Risk Score: 0.1792
+Profitability Score: 0.1085
+Bot Probability: 0.1096
+Influence Score: 0.2349
+Sophistication Score: 0.1797
+
+Transaction Count: 258
+
+Wallet #9: 0x5ed8551f90acc6395810d8274b019bf13ef1f696
+--------------------------------------------------------------------------------
+Categories: Possibly Influential Trader (0.04)
+
+Trading Style Score (6D vector): ['-0.1190', '-0.1197', '0.1646', '0.1101', '-0.1553', '-0.1232']
+Risk Score: 0.1179
+Profitability Score: 0.0157
+Bot Probability: 0.0059
+Influence Score: 1.4234
+Sophistication Score: 0.1133
+
+Transaction Count: 1202
+
+Wallet #10: 0x1b0bb20d345a2699dd65eb316114c8786ac90761
+--------------------------------------------------------------------------------
+Categories: Whale (0.73), Possibly Influential Trader (0.05)
+
+Trading Style Score (6D vector): ['-0.1620', '-0.1678', '0.2316', '0.1504', '-0.2124', '-0.1743']
+Risk Score: 0.0633
+Profitability Score: 0.0041
+Bot Probability: 0.0015
+Influence Score: 1.6595
+Sophistication Score: 0.0534
+
+Transaction Count: 9
+
+Wallet #11: 0x07f48c949aeb53f4bbff1cfaf9ea8fe7546ff974
+--------------------------------------------------------------------------------
+Categories: Possibly Influential Trader (0.10)
+
+Trading Style Score (6D vector): ['-0.3010', '-0.3200', '0.4465', '0.2782', '-0.3988', '-0.3356']
+Risk Score: 0.0095
+Profitability Score: 0.0000
+Bot Probability: 0.0000
+Influence Score: 3.3394
+Sophistication Score: 0.0071
+
+Transaction Count: 4
+
