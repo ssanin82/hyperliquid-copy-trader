@@ -4,6 +4,38 @@
 
 A Python package for tracking Hyperliquid trading activity, recording market data, and using machine learning to detect and classify profitable traders using real-time data streams.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Why WebSocket Streams vs Blockchain Events?](#why-websocket-streams-vs-blockchain-events)
+- [Features](#features)
+- [Installation](#installation)
+  - [From PyPI (when published)](#from-pypi-when-published)
+  - [From source](#from-source)
+- [Usage](#usage)
+  - [Stage 1: Data Collection](#stage-1-data-collection)
+  - [Stage 2: Model Training & Classification](#stage-2-model-training--classification)
+  - [Stage 3: Visualization](#stage-3-visualization)
+- [Machine Learning Model](#machine-learning-model)
+  - [Model Architecture: Multi-Task Learning (MTL)](#model-architecture-multi-task-learning-mtl)
+  - [Training Process](#training-process)
+- [Feature Engineering](#feature-engineering)
+- [Wallet Classification Categories](#wallet-classification-categories)
+  - [Classification Logic](#classification-logic)
+  - [Why Some Wallets Have No Categories](#why-some-wallets-have-no-categories)
+- [Output Format](#output-format)
+- [Challenges and Solutions in Wallet Categorization](#challenges-and-solutions-in-wallet-categorization)
+- [Three-Stage Architecture](#three-stage-architecture)
+- [API Endpoints](#api-endpoints)
+- [Requirements](#requirements)
+- [File Structure](#file-structure)
+- [Important Notes](#important-notes)
+- [Limitations](#limitations)
+- [Future Enhancements](#future-enhancements)
+- [Contributing](#contributing)
+- [License](#license)
+- [Disclaimer](#disclaimer)
+
 ## Overview
 
 This system consists of three main stages:
@@ -592,7 +624,7 @@ The system now uses a **hybrid rule-based + ML-enhanced** approach:
 
 This approach balances interpretability (rules) with intelligence (ML), ensuring the system works reliably while learning from data.
 
-## Two-Stage Architecture
+## Three-Stage Architecture
 
 ### Stage 1: Data Collection (`1_record_data.py`)
 
@@ -611,7 +643,7 @@ This approach balances interpretability (rules) with intelligence (ML), ensuring
 - Enables multiple model runs on same dataset
 - Separates data collection from analysis concerns
 
-### Stage 2: Model Training (`2_run_model.py`)
+### Stage 2: Model Training & Classification (`2_run_model.py`)
 
 **Purpose**: Analyze collected data and generate wallet classifications
 
@@ -620,12 +652,32 @@ This approach balances interpretability (rules) with intelligence (ML), ensuring
 - Extracts features from wallets
 - Trains multi-task learning model
 - Generates predictions and classifications
-- Creates comprehensive report
+- Creates comprehensive report (`final_report.txt`)
 
 **Why Separate Stage?**
 - Can run offline on collected data
 - Allows experimentation with different models
 - Enables batch processing of historical data
+
+### Stage 3: Visualization (`3_frontend.py`)
+
+**Purpose**: Generate interactive dashboard to visualize wallet profiling results
+
+**Features**:
+- Parses `final_report.txt` to extract wallet data
+- Creates interactive HTML dashboard with dark theme
+- Displays wallet cards in responsive grid layout
+- Shows summary statistics (total wallets, wallets with categories)
+- Interactive gauge charts for each wallet (Risk, Profitability, Bot Probability, Sophistication)
+- Copy-to-clipboard functionality for wallet addresses
+- Documentation modal (displays README.md content)
+- Opens automatically in browser
+
+**Why Separate Stage?**
+- Can be run independently after model training
+- Generates static HTML file (works offline)
+- Provides visual interface for exploring results
+- Separates visualization from data collection and analysis
 
 ## API Endpoints
 
@@ -653,10 +705,12 @@ hypertrack/
 ├── 1_record_data.py         # Stage 1: Data collection
 ├── 2_run_model.py          # Stage 2: Model training & classification
 ├── 3_frontend.py            # Stage 3: Interactive dashboard visualization
-├── recorder_trades.py       # Trade recorder module
-├── recorder_bbo.py          # BBO recorder module
-├── recorder_l2Book.py       # L2Book recorder module
-└── recorder_candle.py       # Candle recorder module
+├── recorder_trades.py       # Example: Trade recorder for testing Hyperliquid API
+├── recorder_bbo.py          # Example: BBO recorder for testing Hyperliquid API
+├── recorder_l2Book.py       # Example: L2Book recorder for testing Hyperliquid API
+└── recorder_candle.py       # Example: Candle recorder for testing Hyperliquid API
+
+**Note**: The `recorder_*.py` files are example separate Hyperliquid feed recorders used to test the Hyperliquid API. They demonstrate how to subscribe to individual data streams (trades, BBO, L2Book, candles) and can be used independently for testing purposes. The main data collection is handled by `1_record_data.py`, which integrates all these streams.
 
 recorded_data/               # Data collection output
 ├── blocks.jsonl
