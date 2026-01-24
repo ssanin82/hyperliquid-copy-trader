@@ -36,6 +36,8 @@ A Python package for tracking Hyperliquid trading activity, recording market dat
 - [License](#license)
 - [Disclaimer](#disclaimer)
 
+<img src="hyper.png" alt="hyper" style="width: 70%; max-width: 100%;">
+
 ## Overview
 
 This system consists of three main stages:
