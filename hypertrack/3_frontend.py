@@ -159,9 +159,11 @@ def create_wallet_card_html(wallet: Dict[str, Any], index: int) -> tuple:
     address_short = f"{address[:6]}...{address[-4:]}" if len(address) > 10 else address
     
     # Category badges HTML
+    # Filter out "Occasional Trader" category as it's not informative
+    filtered_categories = [cat for cat in categories if cat.get("name", "").strip() != "Occasional Trader"]
     category_html = ""
-    if categories:
-        for cat in categories[:3]:  # Show top 3 categories
+    if filtered_categories:
+        for cat in filtered_categories[:3]:  # Show top 3 categories
             confidence = cat.get("confidence", 0)
             if confidence > 0.5:
                 badge_class = "badge-success"
@@ -230,10 +232,19 @@ def generate_static_html(data: Dict[str, Any], output_path: str):
     summary = data.get("summary", {})
     wallets = data.get("wallets", [])
     
+    # Filter out wallets with no categories (excluding "Occasional Trader" which is not informative)
+    filtered_wallets = []
+    for wallet in wallets:
+        categories = wallet.get("categories", [])
+        # Filter out "Occasional Trader" and check if any meaningful categories remain
+        meaningful_categories = [cat for cat in categories if cat.get("name", "").strip() != "Occasional Trader"]
+        if meaningful_categories:  # Only include wallets with meaningful categories
+            filtered_wallets.append(wallet)
+    
     # Create wallet cards HTML and collect gauge data
     wallet_cards_html = ""
     all_gauge_data = {}
-    for i, wallet in enumerate(wallets):
+    for i, wallet in enumerate(filtered_wallets):
         card_html, gauge_data = create_wallet_card_html(wallet, i)
         wallet_cards_html += card_html
         all_gauge_data.update(gauge_data)
@@ -752,8 +763,8 @@ def generate_static_html(data: Dict[str, Any], output_path: str):
                 <p>Total Wallets</p>
             </div>
             <div class="summary-card">
-                <h3 class="text-success">{summary.get('wallets_with_categories', 0)}</h3>
-                <p>With Categories</p>
+                <h3 class="text-success">{len(filtered_wallets)}</h3>
+                <p>Wallets Displayed</p>
             </div>
             <div class="summary-card">
                 <h3 class="text-info">{summary.get('generated', 'N/A')[:19] if summary.get('generated') else 'N/A'}</h3>

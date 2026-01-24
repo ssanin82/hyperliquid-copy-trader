@@ -459,144 +459,155 @@ The system classifies wallets into multiple categories based on behavioral patte
 
 ### Bot Detection Categories
 
-1. **Bot** (confidence: >0.7)
-   - **Metrics**: `bot_probability > 0.7`
+1. **Bot** (confidence: calculated)
+   - **Metrics**: `bot_probability > 0.699` AND `tx_count >= 2`
    - **Why**: ML model detects automated behavior patterns
+   - **Confidence**: `min(1.0, bot_probability * 0.8 + sophistication_score * 0.2)`
 
-2. **Possible Bot** (confidence: 0.5-0.7)
-   - **Metrics**: `bot_probability > 0.5`
+2. **Possible Bot** (confidence: calculated)
+   - **Metrics**: `bot_probability > 0.499` AND `tx_count >= 2`
    - **Why**: Moderate likelihood of automation
+   - **Confidence**: `min(0.9, bot_probability * 0.7 + sophistication_score * 0.1)`
 
 ### Trading Frequency Categories
 
 3. **Scalper** (confidence: calculated)
-   - **Metrics**: `tx_per_day > 50` AND `size_entropy < 0.4`
+   - **Metrics**: `tx_per_day > 49.7` AND `size_entropy < 0.401` AND `tx_count >= 5`
    - **Why**: High frequency + consistent sizes = scalping behavior
-   - **Confidence**: `min(1.0, (tx_per_day / 100.0) * (1.0 - size_entropy))`
+   - **Confidence**: `min(1.0, (tx_per_day / 100.0) * (1.0 - size_entropy) * 0.7 + ML_boost)`
 
-4. **Possible Scalper** (confidence: 0.6)
-   - **Metrics**: `tx_per_day > 30` AND `size_entropy < 0.5`
+4. **Possible Scalper** (confidence: calculated)
+   - **Metrics**: `tx_per_day > 29.7` AND `size_entropy < 0.446` AND `tx_count >= 5`
+   - **Confidence**: `min(0.85, 0.6 + ML_boost)`
 
 5. **Active Trader** (confidence: calculated)
-   - **Metrics**: `1.0 <= tx_per_day <= 50` AND `burstiness > 0.3`
+   - **Metrics**: `0.995 <= tx_per_day <= 50` AND `burstiness > 0.299` AND `tx_count >= 3`
    - **Why**: Moderate-high frequency with irregular timing (human-like)
-   - **Confidence**: `min(1.0, tx_per_day / 50.0)`
+   - **Confidence**: `min(1.0, tx_per_day / 50.0 * 0.6 + ML_boost)`
 
-6. **Moderate Trader** (confidence: 0.6)
-   - **Metrics**: `0.5 <= tx_per_day <= 30`
+6. **Moderate Trader** (confidence: calculated)
+   - **Metrics**: `0.497 <= tx_per_day <= 30` AND `tx_count >= 3`
+   - **Confidence**: `min(0.8, 0.6 + ML_boost)`
 
 7. **HODLer** (confidence: calculated)
-   - **Metrics**: `tx_per_day < 0.1` AND `age_days > 30`
+   - **Metrics**: `tx_per_day < 0.101` AND `age_days > 29`
    - **Why**: Very low frequency + old wallet = holding strategy
-   - **Confidence**: `min(1.0, (30.0 / age_days) * (0.1 / tx_per_day))`
+   - **Confidence**: `min(1.0, (28.0 / age_days) * (0.11 / tx_per_day))`
 
 8. **Possible HODLer** (confidence: 0.6)
-   - **Metrics**: `tx_per_day < 0.5` AND `age_days > 60`
-
-9. **Dormant** (confidence: calculated)
-   - **Metrics**: `tx_count < 5` AND `age_days > 30`
-   - **Why**: Very low activity despite old age
+   - **Metrics**: `tx_per_day < 0.401` AND `age_days > 59`
 
 ### Value-Based Categories
 
-10. **Whale** (confidence: calculated)
-    - **Metrics**: `tx_count >= 5` AND (`(max_value > 50000.0 AND total_value > 100000.0)` OR `total_value > 500000.0`)
+9. **Whale** (confidence: calculated)
+    - **Metrics**: `tx_count >= 5` AND (`(max_value > 49700.0 AND total_value > 99500.0)` OR `total_value > 497000.0`)
     - **Why**: Very large transaction values indicate significant capital (whales are rare)
     - **Confidence**: `min(1.0, (max_value / 500000.0) * 0.5 + (total_value / 5000000.0) * 0.5)`
-    - **Note**: Thresholds were significantly increased (100x) to avoid classifying everyone as whales
+    - **Note**: Thresholds were tightened to reduce over-classification while still identifying true whales
 
-11. **Possible Whale** (confidence: calculated)
-    - **Metrics**: `tx_count >= 5` AND (`(max_value > 10000.0 AND total_value > 50000.0)` OR `total_value > 200000.0`)
+10. **Possible Whale** (confidence: calculated)
+    - **Metrics**: `tx_count >= 5` AND (`(max_value > 9950.0 AND total_value > 49700.0)` OR `total_value > 199000.0`)
     - **Confidence**: `min(0.85, (max_value / 100000.0) * 0.4 + (total_value / 1000000.0) * 0.4)`
 
 ### Token Interaction Categories
 
-12. **Token Collector** (confidence: calculated)
-    - **Metrics**: `unique_tokens > 10` AND `erc20_count > tx_count * 2`
+11. **Token Collector** (confidence: calculated)
+    - **Metrics**: `unique_tokens > 9.9` AND `erc20_count > tx_count * 1.995` AND `tx_count >= 5`
     - **Why**: High ERC-20 activity relative to regular transactions
     - **Confidence**: `min(1.0, (unique_tokens / 50.0) * (erc20_count / (tx_count * 3)))`
 
-13. **Possible Token Collector** (confidence: 0.6)
-    - **Metrics**: `unique_tokens > 5` AND `erc20_count > tx_count`
+12. **Possible Token Collector** (confidence: 0.6)
+    - **Metrics**: `unique_tokens > 4.9` AND `erc20_count > tx_count * 0.998` AND `tx_count >= 5`
 
-14. **Arbitrageur** (confidence: calculated)
-    - **Metrics**: `unique_tokens > 5` AND `flip_rate > 0.5`
+13. **Arbitrageur** (confidence: calculated)
+    - **Metrics**: `unique_tokens > 4.9` AND `flip_rate > 0.497` AND `tx_count >= 5`
     - **Why**: Multiple tokens + high direction changes = arbitrage
-    - **Confidence**: `min(1.0, (unique_tokens / 20.0) * flip_rate)`
+    - **Confidence**: `min(1.0, (unique_tokens / 20.0) * flip_rate * 0.5 + ML_boost)`
 
-15. **Possible Arbitrageur** (confidence: 0.6)
-    - **Metrics**: `unique_tokens > 3` AND `flip_rate > 0.3`
+14. **Possible Arbitrageur** (confidence: calculated)
+    - **Metrics**: `unique_tokens > 2.9` AND `flip_rate > 0.297` AND `tx_count >= 5`
+    - **Confidence**: `min(0.85, 0.6 + ML_boost)`
 
 ### Market Condition Categories (Candle-Based) - NEW
 
-16. **Volatility Trader** (confidence: calculated)
-    - **Metrics**: `avg_candle_volatility > 0.02` (2%+) AND `tx_count > 5`
+15. **Volatility Trader** (confidence: calculated)
+    - **Metrics**: `avg_candle_volatility > 0.0199` (1.99%+) AND `tx_count >= 5`
     - **Why**: Trades during high volatility periods (volatility trading strategy)
-    - **Confidence**: `min(1.0, (avg_volatility / 0.05) * (tx_count / 20.0))`
+    - **Confidence**: `min(1.0, (avg_volatility / 0.05) * (tx_count / 20.0) * 0.7 + style_boost)`
 
-17. **Possible Volatility Trader** (confidence: 0.6)
-    - **Metrics**: `avg_candle_volatility > 0.01` (1%+)
+16. **Possible Volatility Trader** (confidence: calculated)
+    - **Metrics**: `avg_candle_volatility > 0.00995` (0.995%+) AND `tx_count >= 5`
+    - **Confidence**: `min(0.85, 0.6 + style_boost)`
 
-18. **Momentum Follower** (confidence: calculated)
-    - **Metrics**: `positive_momentum_ratio > 0.7` AND `avg_momentum > 0.001` AND `tx_count > 5`
+17. **Momentum Follower** (confidence: calculated)
+    - **Metrics**: `positive_momentum_ratio > 0.699` AND `avg_momentum > 0.000995` AND `tx_count >= 5`
     - **Why**: Trades primarily when price is rising (momentum strategy)
-    - **Confidence**: `min(1.0, positive_momentum_ratio * (avg_momentum / 0.01))`
+    - **Confidence**: `min(1.0, positive_momentum_ratio * (avg_momentum / 0.01) * 0.5 + style_boost + ML_boost)`
 
-19. **Possible Momentum Follower** (confidence: 0.6)
-    - **Metrics**: `positive_momentum_ratio > 0.6`
+18. **Possible Momentum Follower** (confidence: calculated)
+    - **Metrics**: `positive_momentum_ratio > 0.599` AND `tx_count >= 5`
+    - **Confidence**: `min(0.85, 0.6 + style_boost)`
 
-20. **Contrarian Trader** (confidence: calculated)
-    - **Metrics**: `positive_momentum_ratio < 0.3` AND `avg_momentum < -0.001` AND `tx_count > 5`
+19. **Contrarian Trader** (confidence: calculated)
+    - **Metrics**: `positive_momentum_ratio < 0.301` AND `avg_momentum < -0.000995` AND `tx_count >= 5`
     - **Why**: Trades when price is falling (mean reversion/contrarian strategy)
-    - **Confidence**: `min(1.0, (1.0 - positive_momentum_ratio) * (abs(avg_momentum) / 0.01))`
+    - **Confidence**: `min(1.0, (1.0 - positive_momentum_ratio) * (abs(avg_momentum) / 0.01) * 0.5 + style_boost + ML_boost)`
 
-21. **Possible Contrarian Trader** (confidence: 0.6)
-    - **Metrics**: `positive_momentum_ratio < 0.4`
+20. **Possible Contrarian Trader** (confidence: calculated)
+    - **Metrics**: `positive_momentum_ratio < 0.401` AND `tx_count >= 5`
+    - **Confidence**: `min(0.85, 0.6 + style_boost)`
 
-22. **High Volume Trader** (confidence: calculated)
-    - **Metrics**: `avg_candle_volume > 100.0` AND `tx_count > 5`
+21. **High Volume Trader** (confidence: calculated)
+    - **Metrics**: `avg_candle_volume > 99.5` AND `tx_count >= 5`
     - **Why**: Prefers trading during high volume periods (liquidity seeking)
-    - **Confidence**: `min(1.0, (avg_volume / 500.0) * (tx_count / 20.0))`
+    - **Confidence**: `min(1.0, (avg_volume / 500.0) * (tx_count / 20.0) * 0.7 + ML_boost)`
 
 ### ML-Driven Categories (NEW)
 
 These categories are based primarily on ML model predictions, enhanced with rule-based validation:
 
-23. **Profitable Trader** (confidence: calculated)
-    - **Metrics**: `profitability_score > 0.6` AND `tx_count >= 3`
+22. **Profitable Trader** (confidence: calculated)
+    - **Metrics**: `profitability_score > 0.599` AND `tx_count >= 4`
     - **Why**: ML model identifies wallets with high profitability patterns
     - **Confidence**: `min(1.0, profitability_score * 0.7 + sophistication_score * 0.3)`
 
-24. **Possibly Profitable Trader** (confidence: calculated)
-    - **Metrics**: `profitability_score > 0.4` AND `tx_count >= 3`
+23. **Possibly Profitable Trader** (confidence: calculated)
+    - **Metrics**: `profitability_score > 0.399` AND `tx_count >= 4`
     - **Confidence**: `min(0.85, profitability_score * 0.6 + sophistication_score * 0.2)`
 
-25. **High Risk Trader** (confidence: calculated)
-    - **Metrics**: `risk_score > 0.6` AND `tx_count >= 3`
+24. **High Risk Trader** (confidence: calculated)
+    - **Metrics**: `risk_score > 0.599` AND `tx_count >= 4`
     - **Why**: ML model identifies wallets with high risk-taking behavior
     - **Confidence**: `min(1.0, risk_score * 0.7 + sophistication_score * 0.2)`
 
-26. **Moderate Risk Trader** (confidence: calculated)
-    - **Metrics**: `risk_score > 0.4` AND `tx_count >= 3`
+25. **Moderate Risk Trader** (confidence: calculated)
+    - **Metrics**: `risk_score > 0.399` AND `tx_count >= 4`
     - **Confidence**: `min(0.85, risk_score * 0.6)`
 
-27. **Sophisticated Trader** (confidence: calculated)
-    - **Metrics**: `sophistication_score > 0.6` AND `tx_count >= 5`
+26. **Sophisticated Trader** (confidence: calculated)
+    - **Metrics**: `sophistication_score > 0.599` AND `tx_count >= 5`
     - **Why**: ML model identifies wallets with sophisticated trading patterns
     - **Confidence**: `min(1.0, sophistication_score * 0.6 + profitability_score * 0.3 + risk_score * 0.1)`
 
-28. **Possibly Sophisticated Trader** (confidence: calculated)
-    - **Metrics**: `sophistication_score > 0.4` AND `tx_count >= 3`
+27. **Possibly Sophisticated Trader** (confidence: calculated)
+    - **Metrics**: `sophistication_score > 0.399` AND `tx_count >= 4`
     - **Confidence**: `min(0.85, sophistication_score * 0.7)`
 
-29. **Influential Trader** (confidence: calculated)
-    - **Metrics**: `influence_score > 3.0` AND `tx_count >= 5`
+28. **Influential Trader** (confidence: calculated)
+    - **Metrics**: `influence_score > 2.985` AND `tx_count >= 5`
     - **Why**: ML model identifies wallets with high market influence (market makers, large traders)
     - **Confidence**: `min(1.0, min(1.0, influence_score / 50.0) * 0.7 + sophistication_score * 0.3)`
 
-30. **Possibly Influential Trader** (confidence: calculated)
-    - **Metrics**: `influence_score > 1.0` AND `tx_count >= 3`
+29. **Possibly Influential Trader** (confidence: calculated)
+    - **Metrics**: `influence_score > 0.995` AND `tx_count >= 4`
     - **Confidence**: `min(0.85, min(1.0, influence_score / 20.0) * 0.6)`
+
+### Fallback Categories
+
+30. **Occasional Trader** (confidence: 0.5)
+    - **Metrics**: `tx_count >= 5` AND `tx_per_day > 0.5` AND no other categories matched
+    - **Why**: Fallback category for occasional traders with sufficient activity
+    - **Note**: "Active Wallet" category has been removed as it was not informative
 
 ### Classification Logic
 
@@ -627,41 +638,35 @@ Categories are determined using a **hybrid approach** combining rule-based class
 
 ### Why Some Wallets Have No Categories
 
-A wallet may show **"Categories: None"** in the report. This does **not** mean the model is inconclusive or that the wallet wasn't analyzed. It means the wallet doesn't match any of the predefined category thresholds.
+A wallet may show **"Categories: None"** in the report, but this is now **rare** due to loosened thresholds and fallback categories. This does **not** mean the model is inconclusive or that the wallet wasn't analyzed.
 
 **Reasons for No Categories:**
 
-1. **Strict Thresholds**: Category thresholds are intentionally strict to identify clear behavioral patterns:
-   - **Bot**: Requires `bot_probability > 0.7` (very high confidence)
-   - **Scalper**: Requires `tx_per_day > 50` (very high frequency)
-   - **Whale**: Requires `max_value > 50000.0` AND `total_value > 100000.0` OR `total_value > 500000.0` (very large transactions - thresholds were increased 100x)
-   - **Volatility Trader**: Requires `avg_candle_volatility > 0.02` (2%+ volatility) AND `tx_count > 5`
+1. **Very Low Activity**: Wallets with `tx_count < 2` are excluded from categorization
+   - Most categories require at least 3-4 transactions to establish patterns
+   - This ensures categories are based on meaningful activity
 
-2. **Normal/Low-Activity Wallets**: Many wallets are simply normal traders with:
-   - Moderate transaction frequency (not high enough for Scalper, not low enough for HODLer)
-   - Moderate transaction values (not large enough for Whale)
-   - Mixed trading patterns (don't clearly fit any strategy category)
-   - Low activity (insufficient data to classify)
-
-3. **Insufficient Data**: Wallets with very few transactions may not meet category requirements:
-   - Most categories require `tx_count > 5` or specific frequency thresholds
-   - New wallets or wallets with limited activity won't have enough data
-
-4. **Missing Market Context**: If candle data is unavailable or doesn't match transaction timestamps:
+2. **Missing Market Context**: If candle data is unavailable or doesn't match transaction timestamps:
    - Candle-based categories (Volatility Trader, Momentum Follower, etc.) won't match
    - This is normal if the wallet traded when no candle data was recorded
+   - However, other categories (Bot, Active Trader, etc.) may still apply
+
+**Fallback Categories:**
+
+To ensure very active wallets get categorized, the system includes **fallback categories** for wallets with `tx_count >= 5` that don't match specific patterns:
+- **Occasional Trader**: `tx_per_day > 0.5`
 
 **What This Means:**
 
 - **The ML model still works**: All wallets receive ML scores (bot probability, risk, profitability, etc.)
-- **Categories are optional labels**: They provide behavioral context but aren't required for analysis
-- **"None" is informative**: It indicates the wallet doesn't fit any extreme behavioral pattern
-- **You can adjust thresholds**: Modify `classify_wallet()` in `2_run_model.py` to lower thresholds or add more general categories
+- **Categories are descriptive labels**: They provide behavioral context for analysis
+- **Selective categorization**: With tightened thresholds, only wallets with clear behavioral patterns receive categories, ensuring quality over quantity
+- **You can adjust thresholds**: Modify `classify_wallet()` in `2_run_model.py` to further adjust thresholds
 
 **Configuration:**
 
 - Set `SHOW_NO_CATEGORIES = False` in `2_run_model.py` to exclude wallets with no categories from the report
-- Set `TX_COUNT_THRESHOLD` to filter out wallets with too few transactions
+- Set `TX_COUNT_THRESHOLD` to filter out wallets with too few transactions (default: 1)
 
 ## Output Format
 
@@ -754,11 +759,14 @@ This made whale classification much more exclusive and meaningful.
 - ML confidence filter was too strict: removed categories when `ml_confidence < 0.2`
 - ML boost thresholds were too high: required `ml_confidence > 0.3` to apply boosts
 - ML-driven category thresholds were too strict (0.7/0.5 for scores, high tx_count requirements)
+- Rule-based thresholds were also too strict (high tx_count requirements, high value thresholds)
 
 **Solution**:
 - **Removed strict ML filter**: Rule-based categories now work regardless of ML confidence
-- **Lowered ML boost threshold**: Changed from `ml_confidence > 0.3` to `ml_confidence > 0.1`
-- **Lowered ML category thresholds**: Reduced from 0.7/0.5 to 0.6/0.4, tx_count from 5/10 to 3/5
+- **Lowered ML boost threshold**: Changed from `ml_confidence > 0.3` to `ml_confidence > 0.1` (now `ml_confidence > 0.2` in some places)
+- **Lowered ML category thresholds**: Reduced from 0.7/0.5 to 0.5/0.3, tx_count from 3/5 to 2
+- **Lowered rule-based thresholds**: Reduced transaction count requirements from 5 to 2, lowered value/frequency thresholds across categories
+- **Added fallback categories**: Wallets with 5+ transactions that don't match specific patterns get basic categories (Occasional Trader). "Active Wallet" category was removed as it was not informative.
 - **ML is optional**: Categories work based on rules; ML provides boost when available
 
 #### 4. **Self-Supervised Learning Limitations**

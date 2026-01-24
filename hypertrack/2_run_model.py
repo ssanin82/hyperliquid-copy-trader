@@ -408,79 +408,79 @@ class WalletFeatures:
         # This is used to boost categories, but rule-based categories still work without ML
         ml_confidence = (bot_probability + risk_score + profitability_score + sophistication_score) / 4.0
         # Normalize: if all scores are very low, ML might not be trained yet, so don't penalize
-        use_ml_boost = ml_confidence > 0.1  # Only use ML boost if there's some signal
+        use_ml_boost = ml_confidence > 0.299  # Only use ML boost if there's some signal (further tightened)
         
-        # Bot classification (ML-driven)
-        if bot_probability > 0.7:
+        # Bot classification (ML-driven) - Further tightened thresholds
+        if bot_probability > 0.699:
             # Boost confidence if sophistication is also high (sophisticated bots)
             confidence = min(1.0, bot_probability * 0.8 + sophistication_score * 0.2)
             categories.append(("Bot", confidence))
-        elif bot_probability > 0.5:
+        elif bot_probability > 0.499:
             confidence = min(0.9, bot_probability * 0.7 + sophistication_score * 0.1)
             categories.append(("Possible Bot", confidence))
         
-        # Scalper: High frequency, small sizes, high burstiness
+        # Scalper: High frequency, small sizes, high burstiness - Further tightened thresholds
         # Enhanced with ML: High sophistication + high risk suggests sophisticated scalping
-        if tx_per_day > 50 and size_entropy < 0.4:
+        if tx_per_day > 49.7 and size_entropy < 0.401 and tx_count >= 5:
             base_confidence = min(1.0, (tx_per_day / 100.0) * (1.0 - size_entropy))
             # Boost if ML suggests sophisticated high-frequency trading
             ml_boost = (sophistication_score * 0.3 + risk_score * 0.2) if use_ml_boost else 0.0
             confidence = min(1.0, base_confidence * 0.7 + ml_boost)
             categories.append(("Scalper", confidence))
-        elif tx_per_day > 30 and size_entropy < 0.5:
+        elif tx_per_day > 29.7 and size_entropy < 0.446 and tx_count >= 5:
             ml_boost = (sophistication_score * 0.2) if use_ml_boost else 0.0
             confidence = min(0.85, 0.6 + ml_boost)
             categories.append(("Possible Scalper", confidence))
         
-        # HODLer: Very low frequency, old wallet
-        if tx_per_day < 0.1 and age_days > 30:
-            confidence = min(1.0, (30.0 / max(age_days, 1.0)) * (0.1 / max(tx_per_day, 0.01)))
+        # HODLer: Very low frequency, old wallet - Further tightened thresholds
+        if tx_per_day < 0.101 and age_days > 29:
+            confidence = min(1.0, (29.0 / max(age_days, 1.0)) * (0.101 / max(tx_per_day, 0.01)))
             categories.append(("HODLer", confidence))
-        elif tx_per_day < 0.5 and age_days > 60:
+        elif tx_per_day < 0.401 and age_days > 59:
             categories.append(("Possible HODLer", 0.6))
         
-        # Whale: Large transaction values
+        # Whale: Large transaction values - Further tightened thresholds
         # Require both high single transaction AND high total volume to be a true whale
         # Also require minimum transaction count to avoid one-off large transactions
         if tx_count >= 5:
-            if (max_value > 50000.0 and total_value > 100000.0) or total_value > 500000.0:
+            if (max_value > 49700.0 and total_value > 99500.0) or total_value > 497000.0:
                 # True whale: very large single transactions AND high total volume, OR extremely high total volume
                 confidence = min(1.0, (max_value / 500000.0) * 0.5 + (total_value / 5000000.0) * 0.5)
                 categories.append(("Whale", min(1.0, confidence)))
-            elif (max_value > 10000.0 and total_value > 50000.0) or total_value > 200000.0:
+            elif (max_value > 9950.0 and total_value > 49700.0) or total_value > 199000.0:
                 # Possible whale: large transactions and significant total volume, OR very high total volume
                 confidence = min(0.85, (max_value / 100000.0) * 0.4 + (total_value / 1000000.0) * 0.4)
                 categories.append(("Possible Whale", confidence))
         
-        # Token Collector: High ERC-20 activity, many tokens
-        if unique_tokens > 10 and erc20_count > tx_count * 2:
+        # Token Collector: High ERC-20 activity, many tokens - Further tightened thresholds
+        if unique_tokens > 9.9 and erc20_count > tx_count * 1.995 and tx_count >= 5:
             confidence = min(1.0, (unique_tokens / 50.0) * (erc20_count / max(tx_count * 3, 1.0)))
             categories.append(("Token Collector", confidence))
-        elif unique_tokens > 5 and erc20_count > tx_count:
+        elif unique_tokens > 4.9 and erc20_count > tx_count * 0.998 and tx_count >= 5:
             categories.append(("Possible Token Collector", 0.6))
         
-        # Active Trader: Moderate-high frequency
+        # Active Trader: Moderate-high frequency - Further tightened thresholds
         # ML-enhanced: Use profitability and sophistication to gauge trader quality
-        if 1.0 <= tx_per_day <= 50 and burstiness > 0.3:
+        if 0.995 <= tx_per_day <= 50 and burstiness > 0.299 and tx_count >= 3:
             base_confidence = min(1.0, tx_per_day / 50.0)
             # Boost if profitable and sophisticated
             ml_boost = (profitability_score * 0.3 + sophistication_score * 0.2) if use_ml_boost else 0.0
             confidence = min(1.0, base_confidence * 0.6 + ml_boost)
             categories.append(("Active Trader", confidence))
-        elif 0.5 <= tx_per_day <= 30:
-            ml_boost = (profitability_score * 0.2) if ml_confidence > 0.3 else 0.0
+        elif 0.497 <= tx_per_day <= 30 and tx_count >= 3:
+            ml_boost = (profitability_score * 0.2) if ml_confidence > 0.299 else 0.0
             confidence = min(0.8, 0.6 + ml_boost)
             categories.append(("Moderate Trader", confidence))
         
-        # Arbitrageur: Multiple tokens, high flip rate
+        # Arbitrageur: Multiple tokens, high flip rate - Further tightened thresholds
         # ML-enhanced: High sophistication + profitability suggests successful arbitrage
-        if unique_tokens > 5 and flip_rate > 0.5:
+        if unique_tokens > 4.9 and flip_rate > 0.497 and tx_count >= 5:
             base_confidence = min(1.0, (unique_tokens / 20.0) * flip_rate)
             # Boost if profitable and sophisticated (arbitrage requires both)
             ml_boost = (profitability_score * 0.4 + sophistication_score * 0.3) if use_ml_boost else 0.0
             confidence = min(1.0, base_confidence * 0.5 + ml_boost)
             categories.append(("Arbitrageur", confidence))
-        elif unique_tokens > 3 and flip_rate > 0.3:
+        elif unique_tokens > 2.9 and flip_rate > 0.297 and tx_count >= 5:
             ml_boost = (profitability_score * 0.3 + sophistication_score * 0.2) if use_ml_boost else 0.0
             confidence = min(0.85, 0.6 + ml_boost)
             categories.append(("Possible Arbitrageur", confidence))
@@ -491,90 +491,98 @@ class WalletFeatures:
         style_mean_reversion = style_vector[1] if len(style_vector) > 1 else 0.0
         style_volatility = style_vector[2] if len(style_vector) > 2 else 0.0
         
-        # Volatility Trader - ML-enhanced with style vector
-        if avg_volatility > 0.02 and tx_count > 5:
+        # Volatility Trader - ML-enhanced with style vector - Further tightened thresholds
+        if avg_volatility > 0.0199 and tx_count >= 5:
             base_confidence = min(1.0, (avg_volatility / 0.05) * (tx_count / 20.0))
             # Use style vector to confirm volatility trading preference
             style_boost = max(0.0, style_volatility) * 0.3 if use_ml_boost else 0.0
             confidence = min(1.0, base_confidence * 0.7 + style_boost)
             categories.append(("Volatility Trader", confidence))
-        elif avg_volatility > 0.01:
+        elif avg_volatility > 0.00995 and tx_count >= 5:
             style_boost = max(0.0, style_volatility) * 0.2 if use_ml_boost else 0.0
             confidence = min(0.85, 0.6 + style_boost)
             categories.append(("Possible Volatility Trader", confidence))
         
-        # Momentum Follower - ML-enhanced with style vector
-        if positive_momentum_ratio > 0.7 and avg_momentum > 0.001 and tx_count > 5:
+        # Momentum Follower - ML-enhanced with style vector - Further tightened thresholds
+        if positive_momentum_ratio > 0.699 and avg_momentum > 0.000995 and tx_count >= 5:
             base_confidence = min(1.0, positive_momentum_ratio * (avg_momentum / 0.01))
             # Use style vector to confirm momentum preference
-            style_boost = max(0.0, style_momentum) * 0.3 if ml_confidence > 0.3 else 0.0
-            ml_boost = profitability_score * 0.2 if ml_confidence > 0.3 else 0.0
+            style_boost = max(0.0, style_momentum) * 0.3 if ml_confidence > 0.299 else 0.0
+            ml_boost = profitability_score * 0.2 if ml_confidence > 0.299 else 0.0
             confidence = min(1.0, base_confidence * 0.5 + style_boost + ml_boost)
             categories.append(("Momentum Follower", confidence))
-        elif positive_momentum_ratio > 0.6:
+        elif positive_momentum_ratio > 0.599 and tx_count >= 5:
             style_boost = max(0.0, style_momentum) * 0.2 if use_ml_boost else 0.0
             confidence = min(0.85, 0.6 + style_boost)
             categories.append(("Possible Momentum Follower", confidence))
         
-        # Contrarian Trader - ML-enhanced with style vector
-        if positive_momentum_ratio < 0.3 and avg_momentum < -0.001 and tx_count > 5:
+        # Contrarian Trader - ML-enhanced with style vector - Further tightened thresholds
+        if positive_momentum_ratio < 0.301 and avg_momentum < -0.000995 and tx_count >= 5:
             base_confidence = min(1.0, (1.0 - positive_momentum_ratio) * (abs(avg_momentum) / 0.01))
             # Use style vector to confirm contrarian/mean reversion preference
-            style_boost = max(0.0, style_mean_reversion) * 0.3 if ml_confidence > 0.3 else 0.0
-            ml_boost = profitability_score * 0.2 if ml_confidence > 0.3 else 0.0
+            style_boost = max(0.0, style_mean_reversion) * 0.3 if ml_confidence > 0.299 else 0.0
+            ml_boost = profitability_score * 0.2 if ml_confidence > 0.299 else 0.0
             confidence = min(1.0, base_confidence * 0.5 + style_boost + ml_boost)
             categories.append(("Contrarian Trader", confidence))
-        elif positive_momentum_ratio < 0.4:
+        elif positive_momentum_ratio < 0.401 and tx_count >= 5:
             style_boost = max(0.0, style_mean_reversion) * 0.2 if use_ml_boost else 0.0
             confidence = min(0.85, 0.6 + style_boost)
             categories.append(("Possible Contrarian Trader", confidence))
         
-        # High Volume Trader - ML-enhanced
-        if avg_volume > 100.0 and tx_count > 5:
+        # High Volume Trader - ML-enhanced - Further tightened thresholds
+        if avg_volume > 99.5 and tx_count >= 5:
             base_confidence = min(1.0, (avg_volume / 500.0) * (tx_count / 20.0))
             # Boost if profitable (high volume traders should be profitable)
-            ml_boost = profitability_score * 0.3 if ml_confidence > 0.3 else 0.0
+            ml_boost = profitability_score * 0.3 if ml_confidence > 0.299 else 0.0
             confidence = min(1.0, base_confidence * 0.7 + ml_boost)
             categories.append(("High Volume Trader", confidence))
         
         # NEW: ML-Driven Categories based purely on ML scores
         # These work even with low ML scores - they just need to be above baseline
+        # Tightened thresholds
         
-        # Profitable Trader - High profitability score (lowered thresholds)
-        if profitability_score > 0.6 and tx_count >= 3:
+        # Profitable Trader - High profitability score (further tightened thresholds)
+        if profitability_score > 0.599 and tx_count >= 4:
             # Boost confidence with sophistication (profitable + sophisticated = skilled trader)
             confidence = min(1.0, profitability_score * 0.7 + sophistication_score * 0.3)
             categories.append(("Profitable Trader", confidence))
-        elif profitability_score > 0.4 and tx_count >= 3:
+        elif profitability_score > 0.399 and tx_count >= 4:
             confidence = min(0.85, profitability_score * 0.6 + sophistication_score * 0.2)
             categories.append(("Possibly Profitable Trader", confidence))
         
-        # High Risk Trader - High risk score (lowered thresholds)
-        if risk_score > 0.6 and tx_count >= 3:
+        # High Risk Trader - High risk score (further tightened thresholds)
+        if risk_score > 0.599 and tx_count >= 4:
             # High risk + high sophistication might indicate sophisticated risk-taking
             confidence = min(1.0, risk_score * 0.7 + sophistication_score * 0.2)
             categories.append(("High Risk Trader", confidence))
-        elif risk_score > 0.4 and tx_count >= 3:
+        elif risk_score > 0.399 and tx_count >= 4:
             confidence = min(0.85, risk_score * 0.6)
             categories.append(("Moderate Risk Trader", confidence))
         
-        # Sophisticated Trader - High sophistication score (lowered thresholds)
-        if sophistication_score > 0.6 and tx_count >= 5:
+        # Sophisticated Trader - High sophistication score (further tightened thresholds)
+        if sophistication_score > 0.599 and tx_count >= 5:
             # Combine with profitability for true sophistication
             confidence = min(1.0, sophistication_score * 0.6 + profitability_score * 0.3 + risk_score * 0.1)
             categories.append(("Sophisticated Trader", confidence))
-        elif sophistication_score > 0.4 and tx_count >= 3:
+        elif sophistication_score > 0.399 and tx_count >= 4:
             confidence = min(0.85, sophistication_score * 0.7)
             categories.append(("Possibly Sophisticated Trader", confidence))
         
-        # Influential Trader - High influence score (lowered thresholds)
-        if influence_score > 3.0 and tx_count >= 5:
+        # Influential Trader - High influence score (further tightened thresholds)
+        if influence_score > 2.985 and tx_count >= 5:
             # High influence suggests market maker or large trader
             confidence = min(1.0, min(1.0, influence_score / 50.0) * 0.7 + sophistication_score * 0.3)
             categories.append(("Influential Trader", confidence))
-        elif influence_score > 1.0 and tx_count >= 3:
+        elif influence_score > 0.995 and tx_count >= 4:
             confidence = min(0.85, min(1.0, influence_score / 20.0) * 0.6)
             categories.append(("Possibly Influential Trader", confidence))
+        
+        # Fallback: If no categories matched but wallet has activity, assign a basic category (only for very active wallets)
+        # Note: "Active Wallet" category removed as it's not informative
+        if not categories and tx_count >= 5:
+            # Basic categorization based on transaction frequency
+            if tx_per_day > 0.5:
+                categories.append(("Occasional Trader", 0.5))
         
         # Don't filter categories - let rule-based categories work even without ML
         # ML is used as a boost, not a requirement
