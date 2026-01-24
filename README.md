@@ -12,6 +12,7 @@ A Python package for tracking Hyperliquid trading activity, recording market dat
 - [Installation](#installation)
   - [From PyPI (when published)](#from-pypi-when-published)
   - [From source](#from-source)
+  - [Environment Variables](#environment-variables)
 - [Usage](#usage)
   - [Stage 1: Data Collection](#stage-1-data-collection)
   - [Stage 2: Model Training & Classification](#stage-2-model-training--classification)
@@ -95,6 +96,35 @@ Or install dependencies only:
 ```bash
 pip install -r requirements.txt
 ```
+
+### Environment Variables
+
+The system requires RPC endpoints for blockchain data access. These are configured via a `.env` file to keep sensitive API keys out of the codebase.
+
+**Why `.env` is necessary:**
+- **Security**: API keys should never be committed to version control
+- **Flexibility**: Different users can use different RPC providers or API keys
+- **Best Practice**: Standard approach for managing configuration and secrets
+
+**Setup:**
+
+1. Copy the example file:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env` and add your Alchemy API key:
+   ```env
+   MAINNET_RPC_HTTP=https://hyperliquid-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+   MAINNET_RPC_WS=wss://hyperliquid-mainnet.g.alchemy.com/v2/YOUR_API_KEY
+   ```
+
+3. Get your API key:
+   - Sign up at [Alchemy](https://www.alchemy.com/)
+   - Create a new app for Hyperliquid Mainnet
+   - Copy your API key and replace `YOUR_API_KEY` in `.env`
+
+**Note**: The `.env` file is already in `.gitignore` and will not be committed to the repository. The `.env.example` file serves as a template for other users.
 
 ## Usage
 

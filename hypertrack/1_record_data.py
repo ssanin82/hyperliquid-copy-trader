@@ -17,11 +17,15 @@ from typing import Dict, Any, Optional, List
 import multiprocessing
 from multiprocessing import Process, Queue as MPQueue, Event
 import os
+from dotenv import load_dotenv
 
-# Constants
-MAINNET_RPC_HTTP = "https://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
-MAINNET_RPC_WS = "wss://hyperliquid-mainnet.g.alchemy.com/v2/E45W-MsgmrM0Ye2gH8ZoX"
-HYPERLIQUID_API_WS = "wss://api.hyperliquid.xyz/ws"
+# Load environment variables from .env file
+load_dotenv()
+
+# Constants - Load from environment variables
+MAINNET_RPC_HTTP = os.getenv("MAINNET_RPC_HTTP", "https://hyperliquid-mainnet.g.alchemy.com/v2/YOUR_API_KEY")
+MAINNET_RPC_WS = os.getenv("MAINNET_RPC_WS", "wss://hyperliquid-mainnet.g.alchemy.com/v2/YOUR_API_KEY")
+HYPERLIQUID_API_WS = os.getenv("HYPERLIQUID_API_WS", "wss://api.hyperliquid.xyz/ws")
 
 API_TOKENS = [
     "ETH",       # Ethereum
