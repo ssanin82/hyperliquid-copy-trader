@@ -210,6 +210,62 @@ Shared Encoder (3-layer MLP with BatchNorm & Dropout)
   - L2 weight decay
 - **Early Stopping**: Stops training if no improvement for 5 epochs, loads best model
 
+#### Score Calculation
+
+The model outputs **6 different scores** for each wallet, each calculated by a dedicated neural network head:
+
+1. **Trading Style Score (6D vector)**
+   - **Range**: -1.0 to 1.0 (Tanh activation)
+   - **Calculation**: 6-dimensional vector representing trading style preferences
+   - **Dimensions**: May represent different trading strategies (momentum, mean reversion, volatility trading, market making, trend following, contrarian)
+   - **Usage**: Used to identify strategy preferences in categorization (e.g., momentum followers, contrarian traders)
+
+2. **Risk Score**
+   - **Range**: 0.0 to 1.0 (Sigmoid activation)
+   - **Calculation**: Neural network output based on 37 input features, trained to identify risk-taking behavior patterns
+   - **Interpretation**: Higher values indicate higher risk-taking behavior
+   - **Usage**: Used in "High Risk Trader" and "Moderate Risk Trader" categories
+
+3. **Profitability Score**
+   - **Range**: 0.0 to 1.0 (Sigmoid activation)
+   - **Calculation**: Neural network output based on 37 input features, trained to identify profitable trading patterns
+   - **Interpretation**: Higher values suggest the wallet exhibits patterns associated with profitable trading
+   - **Usage**: Used in "Profitable Trader" category and to boost confidence in other categories (Active Trader, Arbitrageur, etc.)
+
+4. **Bot Probability**
+   - **Range**: 0.0 to 1.0 (Sigmoid activation)
+   - **Calculation**: Neural network output based on 37 input features, trained to identify bot-like behavior patterns
+   - **Interpretation**: Higher values indicate higher likelihood of automated trading (bot)
+   - **Usage**: Directly used for "Bot" and "Possible Bot" classification
+
+5. **Influence Score**
+   - **Range**: ≥ 0.0 (ReLU activation, unbounded)
+   - **Calculation**: Neural network output based on 37 input features, trained to identify market influence patterns
+   - **Interpretation**: Higher values suggest the wallet has significant market impact (e.g., market makers, large traders)
+   - **Usage**: Used in "Influential Trader" category
+   - **Note**: Unlike other scores, this is unbounded (can exceed 1.0)
+
+6. **Sophistication Score**
+   - **Range**: 0.0 to 1.0 (Sigmoid activation)
+   - **Calculation**: Neural network output based on 37 input features, trained to identify sophisticated trading patterns
+   - **Interpretation**: Higher values indicate more sophisticated trading strategies and execution
+   - **Usage**: Used in "Sophisticated Trader" category and to boost confidence in other categories (Bot, Scalper, Arbitrageur, etc.)
+
+**How Scores Are Generated:**
+
+1. **Feature Extraction**: 37 features are extracted from wallet transaction history and market context
+2. **Feature Normalization**: Features are normalized using z-score normalization (mean=0, std=1)
+3. **Shared Encoder**: All features pass through a shared 3-layer MLP encoder (256 → 256 → 128 dimensions)
+4. **Task-Specific Heads**: The encoded representation is passed to 6 separate neural network heads
+5. **Activation Functions**: Each head applies its specific activation function (Sigmoid, Tanh, or ReLU) to produce the final score
+6. **Self-Supervised Learning**: The model is trained using self-supervised learning (learning patterns in the feature space without explicit labels)
+
+**Important Notes:**
+- Scores are **relative** and based on patterns learned from the data
+- The model learns to distinguish between different wallet behaviors through the shared encoder
+- Higher scores don't necessarily mean "better" - they indicate the strength of a particular characteristic
+- Scores are used both directly (for ML-driven categories) and as confidence boosters (for rule-based categories)
+
 ## Feature Engineering
 
 The model uses **37 features** extracted from wallet transaction history and market context:
