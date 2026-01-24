@@ -173,7 +173,7 @@ Multi-task learning was chosen for several reasons:
 #### Model Structure
 
 ```
-Input Features (37 features)
+Input Features (36 features)
     ↓
 Shared Encoder (3-layer MLP with BatchNorm & Dropout)
     ├─→ Trading Style Head (6D vector)
@@ -185,7 +185,7 @@ Shared Encoder (3-layer MLP with BatchNorm & Dropout)
 ```
 
 **Architecture Details**:
-- **Input Dimension**: 37 features (see Feature Engineering section)
+- **Input Dimension**: 36 features (see Feature Engineering section)
 - **Hidden Dimensions**: 256 → 256 → 128 (shared encoder)
 - **Activation**: ReLU with BatchNorm and 30% dropout for regularization
 - **Output Layers**: Task-specific heads with appropriate activations (Sigmoid for probabilities, Tanh for bounded vectors, ReLU for non-negative scores)
@@ -222,38 +222,38 @@ The model outputs **6 different scores** for each wallet, each calculated by a d
 
 2. **Risk Score**
    - **Range**: 0.0 to 1.0 (Sigmoid activation)
-   - **Calculation**: Neural network output based on 37 input features, trained to identify risk-taking behavior patterns
+   - **Calculation**: Neural network output based on 36 input features, trained to identify risk-taking behavior patterns
    - **Interpretation**: Higher values indicate higher risk-taking behavior
    - **Usage**: Used in "High Risk Trader" and "Moderate Risk Trader" categories
 
 3. **Profitability Score**
    - **Range**: 0.0 to 1.0 (Sigmoid activation)
-   - **Calculation**: Neural network output based on 37 input features, trained to identify profitable trading patterns
+   - **Calculation**: Neural network output based on 36 input features, trained to identify profitable trading patterns
    - **Interpretation**: Higher values suggest the wallet exhibits patterns associated with profitable trading
    - **Usage**: Used in "Profitable Trader" category and to boost confidence in other categories (Active Trader, Arbitrageur, etc.)
 
 4. **Bot Probability**
    - **Range**: 0.0 to 1.0 (Sigmoid activation)
-   - **Calculation**: Neural network output based on 37 input features, trained to identify bot-like behavior patterns
+   - **Calculation**: Neural network output based on 36 input features, trained to identify bot-like behavior patterns
    - **Interpretation**: Higher values indicate higher likelihood of automated trading (bot)
    - **Usage**: Directly used for "Bot" and "Possible Bot" classification
 
 5. **Influence Score**
    - **Range**: ≥ 0.0 (ReLU activation, unbounded)
-   - **Calculation**: Neural network output based on 37 input features, trained to identify market influence patterns
+   - **Calculation**: Neural network output based on 36 input features, trained to identify market influence patterns
    - **Interpretation**: Higher values suggest the wallet has significant market impact (e.g., market makers, large traders)
    - **Usage**: Used in "Influential Trader" category
    - **Note**: Unlike other scores, this is unbounded (can exceed 1.0)
 
 6. **Sophistication Score**
    - **Range**: 0.0 to 1.0 (Sigmoid activation)
-   - **Calculation**: Neural network output based on 37 input features, trained to identify sophisticated trading patterns
+   - **Calculation**: Neural network output based on 36 input features, trained to identify sophisticated trading patterns
    - **Interpretation**: Higher values indicate more sophisticated trading strategies and execution
    - **Usage**: Used in "Sophisticated Trader" category and to boost confidence in other categories (Bot, Scalper, Arbitrageur, etc.)
 
 **How Scores Are Generated:**
 
-1. **Feature Extraction**: 37 features are extracted from wallet transaction history and market context
+1. **Feature Extraction**: 36 features are extracted from wallet transaction history and market context
 2. **Feature Normalization**: Features are normalized using z-score normalization (mean=0, std=1)
 3. **Shared Encoder**: All features pass through a shared 3-layer MLP encoder (256 → 256 → 128 dimensions)
 4. **Task-Specific Heads**: The encoded representation is passed to 6 separate neural network heads
@@ -268,84 +268,188 @@ The model outputs **6 different scores** for each wallet, each calculated by a d
 
 ## Feature Engineering
 
-The model uses **37 features** extracted from wallet transaction history and market context:
+The model uses **36 features** extracted from wallet transaction history and market context:
 
 ### Basic Transaction Features (4)
-- `tx_count`: Total number of transactions
-- `erc20_count`: Number of ERC-20 token transfers
-- `unique_tokens`: Number of unique tokens interacted with
-- `unique_addresses`: Number of unique addresses interacted with
+
+1. **`tx_count`**: Total number of transactions performed by the wallet
+   - **Purpose**: Measures overall trading activity level
+   - **Usage**: Used to filter low-activity wallets and identify active traders
+
+2. **`erc20_count`**: Number of ERC-20 token transfers
+   - **Purpose**: Distinguishes between regular transactions and token transfers
+   - **Usage**: Helps identify token collectors and DeFi participants
+
+3. **`unique_tokens`**: Number of unique tokens the wallet has interacted with
+   - **Purpose**: Measures token diversity and trading breadth
+   - **Usage**: Identifies arbitrageurs (high diversity) and specialized traders (low diversity)
+
+4. **`unique_addresses`**: Number of unique addresses the wallet has interacted with
+   - **Purpose**: Measures network connectivity and interaction patterns
+   - **Usage**: Helps identify market makers and active network participants
 
 ### Temporal Features (4)
-- `age_days`: Wallet age in days (first seen to last seen)
-- `tx_per_day`: Average transactions per day
-- `burstiness`: Coefficient of variation of inter-transaction times (measures irregularity)
-- `hour_entropy`: Entropy of transaction hour distribution (measures time diversity)
 
-**Why these metrics?**
-- **Burstiness**: Detects bot-like behavior (regular intervals) vs human behavior (irregular)
-- **Hour Entropy**: Low entropy = trades at specific times (possibly bot), high entropy = trades throughout day (human)
+5. **`age_days`**: Wallet age in days (time from first seen to last seen)
+   - **Purpose**: Measures wallet maturity and trading history length
+   - **Usage**: Distinguishes new wallets from established traders; used in HODLer classification
+
+6. **`tx_per_day`**: Average number of transactions per day
+   - **Purpose**: Measures trading frequency and activity rate
+   - **Usage**: Key metric for Scalper (high) and HODLer (low) classification
+
+7. **`burstiness`**: Coefficient of variation of inter-transaction times
+   - **Purpose**: Measures irregularity of trading patterns
+   - **Calculation**: `std(inter_tx_times) / mean(inter_tx_times)`
+   - **Usage**: High burstiness = human-like irregular trading; low burstiness = bot-like regular trading
+
+8. **`hour_entropy`**: Entropy of transaction hour distribution
+   - **Purpose**: Measures time diversity of trading activity
+   - **Calculation**: Shannon entropy of hour-of-day distribution
+   - **Usage**: Low entropy = trades at specific times (possibly bot); high entropy = trades throughout day (human)
 
 ### Value Features (4)
-- `total_value`: Sum of all transaction values
-- `avg_value`: Average transaction value
-- `max_value`: Maximum single transaction value
-- `value_std`: Standard deviation of transaction values
 
-**Why these metrics?**
-- Identifies whales (high values) and consistent traders (low std)
+9. **`total_value`**: Sum of all transaction values
+   - **Purpose**: Measures total trading volume
+   - **Usage**: Identifies high-volume traders and whales
 
-### ERC-20 Features (2)
-- `erc20_volume`: Total volume of ERC-20 transfers
-- `token_diversity`: Number of unique tokens (same as `unique_tokens`)
+10. **`avg_value`**: Average transaction value
+    - **Purpose**: Measures typical transaction size
+    - **Usage**: Distinguishes between small and large traders
+
+11. **`max_value`**: Maximum single transaction value
+    - **Purpose**: Identifies the largest transaction
+    - **Usage**: Key metric for Whale classification (very large single transactions)
+
+12. **`value_std`**: Standard deviation of transaction values
+    - **Purpose**: Measures consistency of transaction sizes
+    - **Usage**: Low std = consistent trader; high std = varied trading patterns
+
+### ERC-20 Features (1)
+
+13. **`erc20_volume`**: Total volume of ERC-20 token transfers
+    - **Purpose**: Measures token transfer activity separate from regular transactions
+    - **Usage**: Identifies token collectors and DeFi participants
 
 ### Directional Features (2)
-- `long_ratio`: Ratio of long positions to total positions
-- `flip_rate`: Rate of direction changes (long→short or short→long)
 
-**Why these metrics?**
-- **Flip Rate**: High flip rate suggests arbitrage or mean reversion strategies
+14. **`long_ratio`**: Ratio of long positions to total positions
+    - **Purpose**: Measures directional bias (bullish vs bearish)
+    - **Usage**: Identifies directional traders vs market-neutral strategies
+
+15. **`flip_rate`**: Rate of direction changes (long→short or short→long)
+    - **Purpose**: Measures how often the wallet changes position direction
+    - **Calculation**: Number of direction changes / total position changes
+    - **Usage**: High flip rate suggests arbitrage or mean reversion strategies
 
 ### Size Features (1)
-- `size_entropy`: Entropy of trade size distribution
 
-**Why this metric?**
-- Low entropy = consistent sizes (bot-like), high entropy = varied sizes (human-like)
+16. **`size_entropy`**: Entropy of trade size distribution
+    - **Purpose**: Measures consistency vs variety in trade sizes
+    - **Calculation**: Shannon entropy of trade size distribution
+    - **Usage**: Low entropy = consistent sizes (bot-like); high entropy = varied sizes (human-like)
 
-### Network Features (2)
-- `contract_interaction_count`: Number of unique contracts interacted with
-- `address_diversity`: Number of unique addresses (same as `unique_addresses`)
+### Network Features (1)
+
+17. **`contract_interaction_count`**: Number of unique smart contracts interacted with
+    - **Purpose**: Measures DeFi protocol engagement and sophistication
+    - **Usage**: Higher counts suggest sophisticated DeFi users
 
 ### Market Impact Features (4)
-- `avg_market_impact`: Average market impact per trade
-- `max_market_impact`: Maximum market impact
-- `avg_slippage`: Average slippage experienced
-- `slippage_std`: Slippage consistency
+
+18. **`avg_market_impact`**: Average market impact per trade
+    - **Purpose**: Measures how much each trade moves the market price
+    - **Usage**: High impact = large trader or illiquid markets; low impact = small trader or liquid markets
+
+19. **`max_market_impact`**: Maximum market impact observed
+    - **Purpose**: Identifies the largest single market impact event
+    - **Usage**: Helps identify whales and high-impact traders
+
+20. **`avg_slippage`**: Average slippage experienced per trade
+    - **Purpose**: Measures execution quality and market liquidity
+    - **Usage**: High slippage = large orders or illiquid markets; low slippage = efficient execution
+
+21. **`slippage_std`**: Standard deviation of slippage
+    - **Purpose**: Measures consistency of execution quality
+    - **Usage**: Low std = consistent execution; high std = variable market conditions
 
 ### Trading Strategy Features (5)
-- `momentum_score`: Tendency to follow momentum
-- `mean_reversion_score`: Tendency to trade against trends
-- `volatility_trading_score`: Activity during volatile periods
-- `market_maker_score`: Market making activity
-- `order_book_participation`: Order book interaction level
 
-### Candle-Based Features (10) - NEW
+22. **`momentum_score`**: Tendency to follow momentum (buy when price rising, sell when falling)
+    - **Purpose**: Identifies momentum-following strategies
+    - **Usage**: Used in Momentum Follower classification
 
-These features provide market context during active trading periods:
+23. **`mean_reversion_score`**: Tendency to trade against trends (buy when price falling, sell when rising)
+    - **Purpose**: Identifies contrarian and mean reversion strategies
+    - **Usage**: Used in Contrarian Trader classification
 
-- `avg_candle_volatility`: Average volatility `(high - low) / open` during active periods
-- `max_candle_volatility`: Maximum volatility encountered
-- `volatility_std`: Consistency of volatility levels
-- `avg_candle_momentum`: Average price momentum `(close - open) / open`
-- `momentum_std`: Consistency of momentum
-- `positive_momentum_ratio`: Ratio of periods with positive momentum
-- `avg_trend_strength`: Average trend strength `|close - open| / (high - low)`
-- `avg_candle_volume`: Average volume during active periods
-- `max_candle_volume`: Maximum volume encountered
-- `volume_std`: Volume consistency
+24. **`volatility_trading_score`**: Activity during volatile market periods
+    - **Purpose**: Measures preference for trading during high volatility
+    - **Usage**: Used in Volatility Trader classification
 
-**Why candle features?**
-- **Market Context**: Understanding market conditions (volatility, momentum, volume) when traders are active helps classify their strategies
+25. **`market_maker_score`**: Market making activity level
+    - **Purpose**: Measures provision of liquidity (placing orders on both sides)
+    - **Usage**: Identifies market makers and liquidity providers
+
+26. **`order_book_participation`**: Level of order book interaction
+    - **Purpose**: Measures engagement with limit orders vs market orders
+    - **Usage**: Higher values suggest sophisticated order placement strategies
+
+### Candle-Based Features (10)
+
+These features provide market context during active trading periods by analyzing OHLCV candle data matched to transaction timestamps:
+
+27. **`avg_candle_volatility`**: Average volatility during active trading periods
+    - **Calculation**: `mean((high - low) / open)` for candles matched to transactions
+    - **Purpose**: Measures typical market volatility when the wallet trades
+    - **Usage**: Used in Volatility Trader classification
+
+28. **`max_candle_volatility`**: Maximum volatility encountered
+    - **Purpose**: Identifies the most volatile period the wallet traded in
+    - **Usage**: Helps identify volatility-seeking traders
+
+29. **`volatility_std`**: Standard deviation of volatility levels
+    - **Purpose**: Measures consistency of volatility preferences
+    - **Usage**: Low std = consistent volatility preference; high std = trades in various conditions
+
+30. **`avg_candle_momentum`**: Average price momentum during active periods
+    - **Calculation**: `mean((close - open) / open)` for matched candles
+    - **Purpose**: Measures typical price direction when the wallet trades
+    - **Usage**: Used in Momentum Follower and Contrarian Trader classification
+
+31. **`momentum_std`**: Standard deviation of momentum
+    - **Purpose**: Measures consistency of momentum preferences
+    - **Usage**: Low std = consistent momentum preference; high std = trades in various conditions
+
+32. **`positive_momentum_ratio`**: Ratio of periods with positive momentum (price rising)
+    - **Calculation**: `count(positive_momentum) / total_periods`
+    - **Purpose**: Measures tendency to trade during upswings vs downswings
+    - **Usage**: High ratio = momentum follower; low ratio = contrarian trader
+
+33. **`avg_trend_strength`**: Average trend strength during active periods
+    - **Calculation**: `mean(|close - open| / (high - low))` for matched candles
+    - **Purpose**: Measures how strong trends are when the wallet trades
+    - **Usage**: Identifies trend-following vs range-trading strategies
+
+34. **`avg_candle_volume`**: Average trading volume during active periods
+    - **Purpose**: Measures typical market liquidity when the wallet trades
+    - **Usage**: Used in High Volume Trader classification
+
+35. **`max_candle_volume`**: Maximum volume encountered
+    - **Purpose**: Identifies the highest volume period the wallet traded in
+    - **Usage**: Helps identify liquidity-seeking traders
+
+36. **`volume_std`**: Standard deviation of volume
+    - **Purpose**: Measures consistency of volume preferences
+    - **Usage**: Low std = consistent volume preference; high std = trades in various liquidity conditions
+
+**Why These Features?**
+- **Comprehensive Coverage**: Features span transaction patterns, temporal behavior, value metrics, market interactions, and market context
+- **Bot Detection**: Temporal features (burstiness, hour_entropy) and size features (size_entropy) help identify automated trading
+- **Strategy Identification**: Directional, strategy, and candle features help classify trading strategies
+- **Market Context**: Candle features provide crucial context about market conditions during trading activity
+- **Whale Identification**: Value features (max_value, total_value) help identify large traders
 - **Strategy Identification**: Volatility traders trade during high volatility, momentum followers trade during uptrends, contrarians trade during downtrends
 - **Timing Analysis**: Reveals whether traders prefer specific market conditions
 
